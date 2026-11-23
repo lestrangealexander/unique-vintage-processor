@@ -153,7 +153,7 @@ jobs:
         run: |
           VERSION=$(sed -n 's/^project(UniqueVintageProcessor VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${VERSION}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "tag=build-${VERSION}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@v4
         with:
@@ -176,7 +176,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: Unique Vintage Processor ${{ steps.ver.outputs.version }} (${{ steps.ver.outputs.tag }})
+          name: Unique Vintage Processor ${{ steps.ver.outputs.version }} (Mac + Windows, ${{ steps.ver.outputs.tag }})
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: false
           files: |
