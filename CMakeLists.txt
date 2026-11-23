@@ -10,6 +10,9 @@ project(UniqueVintageProcessor VERSION 0.5.0 LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Windows: link the C++ runtime statically so the plugin needs no Visual C++ redistributable.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 option(UVP_BUILD_HARNESS "Build the offline DSP test harness" OFF)
 
 # JUCE: use a local checkout if given (-DUVP_JUCE_PATH=...), otherwise fetch the pinned release.
@@ -70,6 +73,11 @@ target_sources(UniqueVintageProcessor PRIVATE
     ${UVP_DSP_SOURCES})
 
 target_include_directories(UniqueVintageProcessor PRIVATE Source)
+
+if(MSVC)
+    # sources are UTF-8; large translation units
+    target_compile_options(UniqueVintageProcessor PRIVATE /utf-8 /bigobj)
+endif()
 
 target_compile_definitions(UniqueVintageProcessor PUBLIC
     JUCE_WEB_BROWSER=0

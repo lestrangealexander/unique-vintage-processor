@@ -1,0 +1,172 @@
+name: Build (Mac AU + VST3, Windows VST3)
+
+on:
+  push:
+    branches: ['**']
+    paths-ignore: ['README.md', 'Tests/**', 'Tools/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (universal arm64 + x86_64, macOS 11+)
+        run: |
+          set -o pipefail
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DUVP_BUILD_HARNESS=OFF 2>&1 | tee configure.log
+
+      - name: Build
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --target UniqueVintageProcessor_AU UniqueVintageProcessor_VST3 -j 4 2>&1 | tee build.log
+
+      - name: Sign (ad hoc) and package
+        run: |
+          set -e
+          ART="build/UniqueVintageProcessor_artefacts/Release"
+          AU="$ART/AU/Unique Vintage Processor.component"
+          VST3="$ART/VST3/Unique Vintage Processor.vst3"
+          codesign --force --deep --sign - "$AU"
+          codesign --force --deep --sign - "$VST3"
+          lipo -info "$AU/Contents/MacOS/Unique Vintage Processor" | tee lipo.log
+          mkdir -p "dist/Unique Vintage Processor"
+          cp -R "$AU" "$VST3" "dist/Unique Vintage Processor/"
+          cp README.md "dist/Unique Vintage Processor/READ ME.md"
+          cd dist && ditto -c -k --sequesterRsrc --keepParent "Unique Vintage Processor" UniqueVintageProcessor-mac.zip
+
+      - name: Validate the AU (auval)
+        continue-on-error: true
+        run: |
+          mkdir -p ~/Library/Audio/Plug-Ins/Components
+          cp -R "build/UniqueVintageProcessor_artefacts/Release/AU/Unique Vintage Processor.component" ~/Library/Audio/Plug-Ins/Components/
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          sleep 3
+          auval -v aufx UvPr SqAu 2>&1 | tee auval.log | tail -40
+
+      - name: Collect
+        run: |
+          mkdir -p out
+          cp dist/UniqueVintageProcessor-mac.zip lipo.log out/
+          cp auval.log out/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: out/
+
+      - name: Publish logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/logs && cp *.log /tmp/logs/ 2>/dev/null || true
+          echo "${GITHUB_SHA}" > /tmp/logs/COMMIT
+          cd /tmp/logs
+          git init -q && git checkout -q -b build-logs-mac
+          git add -A
+          git -c user.name="build bot" -c user.email="build-bot@users.noreply.github.com" commit -q -m "mac build logs for ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" build-logs-mac
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (64-bit)
+        run: |
+          set -o pipefail
+          cmake -B build -A x64 -DUVP_BUILD_HARNESS=OFF 2>&1 | tee configure.log
+
+      - name: Build
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --target UniqueVintageProcessor_VST3 --parallel 4 2>&1 | tee build.log
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $vst3 = "build/UniqueVintageProcessor_artefacts/Release/VST3/Unique Vintage Processor.vst3"
+          New-Item -ItemType Directory -Force -Path "dist/Unique Vintage Processor" | Out-Null
+          Copy-Item -Recurse $vst3 "dist/Unique Vintage Processor/"
+          Copy-Item README.md "dist/Unique Vintage Processor/READ ME.md"
+          Compress-Archive -Path "dist/Unique Vintage Processor" -DestinationPath "dist/UniqueVintageProcessor-win64.zip"
+          Get-ChildItem -Recurse "dist/Unique Vintage Processor" | Select-Object FullName, Length | Format-Table -AutoSize | Out-String -Width 300 | Tee-Object -FilePath contents.log
+
+      - name: Validate (pluginval)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
+          Expand-Archive pluginval.zip -DestinationPath pluginval
+          $pv = (Get-ChildItem -Recurse pluginval -Filter pluginval.exe | Select-Object -First 1).FullName
+          & $pv --strictness-level 5 --skip-gui-tests --timeout-ms 900000 --validate "build/UniqueVintageProcessor_artefacts/Release/VST3/Unique Vintage Processor.vst3" *>&1 | Tee-Object -FilePath pluginval.log
+          exit $LASTEXITCODE
+
+      - name: Collect
+        if: always()
+        run: |
+          mkdir -p out
+          cp dist/UniqueVintageProcessor-win64.zip out/ 2>/dev/null || true
+          cp contents.log pluginval.log out/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/
+
+      - name: Publish logs on failure
+        if: failure()
+        run: |
+          mkdir -p /tmp/logs && cp *.log /tmp/logs/ 2>/dev/null || true
+          echo "${GITHUB_SHA}" > /tmp/logs/COMMIT
+          cd /tmp/logs
+          git init -q && git checkout -q -b build-logs-win
+          git add -A
+          git -c user.name="build bot" -c user.email="build-bot@users.noreply.github.com" commit -q -m "windows build logs for ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" build-logs-win
+
+  publish:
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+
+      - name: Publish the builds to the 'builds' branch
+        run: |
+          set -e
+          mkdir -p /tmp/out
+          cp art/mac/* art/windows/* /tmp/out/
+          echo "${GITHUB_SHA}" > /tmp/out/COMMIT
+          cd /tmp/out
+          git init -q && git checkout -q -b builds
+          git add -A
+          git -c user.name="build bot" -c user.email="build-bot@users.noreply.github.com" commit -q -m "builds of ${GITHUB_SHA}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" builds
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Unique Vintage Processor (build ${{ github.run_number }})
+          target_commitish: ${{ github.sha }}
+          files: |
+            art/mac/UniqueVintageProcessor-mac.zip
+            art/windows/UniqueVintageProcessor-win64.zip
+          body: |
+            Mac: AU + VST3, universal (Apple Silicon and Intel), macOS 11 or later. Ad-hoc signed for personal use.
+            Windows: VST3, 64-bit, Windows 10 or later.
+            Install steps are in READ ME.md inside each zip.

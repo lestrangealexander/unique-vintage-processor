@@ -6,7 +6,7 @@
 2. Analog harmonics: EVEN (valve), ODD (transformer) or HECTIC (valve, then transformer, then clipper).
 3. Optional MORE COLOUR tape machines: SILK, SOLID, HOME, GARAGE and CASSETTE.
 
-The plugin builds as AU and VST3, universal for Apple Silicon and Intel, and needs macOS 11 or later. It is for personal use, so builds are ad-hoc signed rather than notarised.
+The Mac build is AU and VST3, universal for Apple Silicon and Intel, and needs macOS 11 or later. The Windows build is a 64-bit VST3 for Windows 10 or 11. It is for personal use, so builds are not notarised or code-signed.
 
 ## Installing on a Mac
 
@@ -26,6 +26,14 @@ The plugin builds as AU and VST3, universal for Apple Silicon and Intel, and nee
 
 When you update to a newer build, replace both files, run the same `xattr` line again and restart the DAW.
 
+## Installing on Windows
+
+1. Download `UniqueVintageProcessor-win64.zip`. Before unzipping, right-click it, choose **Properties**, tick **Unblock** if it's shown, then click **OK**.
+2. Unzip it and copy the whole `Unique Vintage Processor.vst3` folder into `C:\Program Files\Common Files\VST3\`. Windows will ask for administrator permission; that's normal.
+3. Restart your DAW and rescan plugins.
+
+To update, replace the `.vst3` folder and rescan. Presets are stored in `%APPDATA%\Sound Aquarium\Unique Vintage Processor\Presets`.
+
 ## Controls
 
 | Control | What it does |
@@ -41,7 +49,7 @@ When you update to a newer build, replace both files, run the same `xattr` line 
 | **DELTA** | Lets you hear only what the vintage section changes. |
 | **BYPASS** | Smooth in/out switch with matched latency. |
 | **OS** | Oversampling for the harmonics: 1X, 2X, 4X (default), 8X or 16X. Tape runs at up to 8X. EVEN is clean from 2X up; ODD and HECTIC at high AMOUNT with a bright source are cleanest at 8X or 16X. |
-| **MENU / SAVE** | User presets, stored in `~/Library/Audio/Presets/Sound Aquarium/Unique Vintage Processor`. MENU also has the interface size setting. |
+| **MENU / SAVE** | User presets (Mac: `~/Library/Audio/Presets/Sound Aquarium/Unique Vintage Processor`; Windows: see above). MENU also has the interface size setting. |
 | **EXPAND** | Shows the analyser: input (yellow), output (line) and suppression (salmon). |
 
 Double-click any knob or slider to reset it. The plugin has a constant latency of about 78 ms at 48 kHz, which your DAW compensates automatically.
@@ -53,6 +61,6 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --target UniqueVintageProcessor_AU UniqueVintageProcessor_VST3
 ```
 
-The build fetches JUCE 9.0.6 automatically. Every push builds on GitHub Actions (`.github/workflows/build-macos.yml`) and publishes a release. Add `-DUVP_BUILD_HARNESS=ON` to build the offline test harness in `Tests/`.
+The build fetches JUCE 9.0.6 automatically. Every push builds the Mac and Windows versions on GitHub Actions (`.github/workflows/build.yml`) and publishes both in one release. Add `-DUVP_BUILD_HARNESS=ON` to build the offline test harness in `Tests/`.
 
 JUCE is licensed under the AGPLv3 or the JUCE commercial licence. The DM Sans font is used under the SIL Open Font License; see `Resources/DMSans-OFL.txt`.
