@@ -525,6 +525,203 @@ int cmdAgCheck()
     return 0;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Aliasing: a pure tone exactly on an FFT bin, steady state, 7-term Blackman-Harris window.
+// Everything that is not the tone, one of its harmonics below Nyquist, or DC is counted as
+// aliasing (inharmonic energy). Reported relative to the output fundamental.
+struct AliasResult { double fundDb, worstAliasDb, worstAliasHz, totalAliasDb, thdDb; };
+
+static AliasResult measureAlias (const EngineParams& p, double f0Target, double levelDbfs)
+{
+    constexpr int order = 16, N = 1 << order;
+    const double binHz = kFs / N;
+    const int k0 = (int) std::round (f0Target / binHz);
+    const double f0 = k0 * binHz;
+    const size_t total = (size_t) (kFs * 2.0) + (size_t) N;
+    Sig in (total);
+    const double amp = std::pow (10.0, levelDbfs / 20.0) * std::sqrt (2.0) * 0.5 * std::sqrt (2.0); // peak = level dBFS (sine peak)
+    for (size_t i = 0; i < total; ++i)
+        in.l[i] = in.r[i] = (float) (std::pow (10.0, levelDbfs / 20.0) * std::sin (kTwoPi * f0 * (double) i / kFs));
+    (void) amp;
+    const Sig o = runEngine (in, p, 512, nullptr);
+
+    static const double c[7] = { 0.27105140069342, 0.43329793923448, 0.21812299954311, 0.06592544638803,
+                                 0.01081174209837, 0.00077658482522, 0.00001388721735 };
+    std::vector<float> buf ((size_t) (2 * N), 0.0f);
+    double wsum = 0.0;
+    for (int i = 0; i < N; ++i)
+    {
+        const double x = kTwoPi * i / N;
+        double w = 0.0;
+        for (int m = 0; m < 7; ++m) w += (m % 2 ? -1.0 : 1.0) * c[m] * std::cos (m * x);
+        wsum += w;
+        buf[(size_t) i] = (float) (w * o.l[total - (size_t) N + (size_t) i]);
+    }
+    juce::dsp::FFT fft (order);
+    fft.performFrequencyOnlyForwardTransform (buf.data(), true);
+    std::vector<double> pw ((size_t) (N / 2));
+    for (int k = 0; k < N / 2; ++k) { const double m = buf[(size_t) k] / (wsum * 0.5); pw[(size_t) k] = m * m; }
+
+    auto bandPower = [&] (int centre, int halfWidth) {
+        double s = 0.0;
+        for (int k = std::max (0, centre - halfWidth); k <= std::min (N / 2 - 1, centre + halfWidth); ++k) s += pw[(size_t) k];
+        return s;
+    };
+    const int guard = 12;
+    std::vector<char> excluded ((size_t) (N / 2), 0);
+    for (int k = 0; k <= guard; ++k) excluded[(size_t) k] = 1;                      // DC
+    const double fund = bandPower (k0, guard);
+    double harm = 0.0;
+    for (int h = 1; h * k0 < N / 2; ++h)
+    {
+        if (h > 1) harm += bandPower (h * k0, guard);
+        for (int k = h * k0 - guard; k <= h * k0 + guard; ++k)
+            if (k >= 0 && k < N / 2) excluded[(size_t) k] = 1;
+    }
+    const int kMax = (int) (20000.0 / binHz);
+    double alias = 0.0, worst = 0.0;
+    int worstK = 0;
+    for (int k = (int) (20.0 / binHz); k <= kMax; ++k)
+    {
+        if (excluded[(size_t) k]) continue;
+        alias += pw[(size_t) k];
+    }
+    // worst single component: power summed over its window main lobe
+    for (int k = (int) (20.0 / binHz); k <= kMax; ++k)
+    {
+        if (excluded[(size_t) k]) continue;
+        if (pw[(size_t) k] > worst) { worst = pw[(size_t) k]; worstK = k; }
+    }
+    const double worstLobe = worstK > 0 ? bandPower (worstK, 7) : 0.0;
+    if (std::getenv ("UVP_ALIAS_DETAIL"))
+    {
+        // list the strongest inharmonic peaks (local maxima)
+        std::vector<std::pair<double, int>> peaks;
+        for (int k = (int) (20.0 / binHz) + 1; k < kMax; ++k)
+            if (! excluded[(size_t) k] && pw[(size_t) k] > pw[(size_t) k - 1] && pw[(size_t) k] >= pw[(size_t) k + 1])
+                peaks.push_back ({ pw[(size_t) k], k });
+        std::sort (peaks.begin(), peaks.end(), [] (auto& x, auto& y) { return x.first > y.first; });
+        for (size_t i = 0; i < std::min<size_t> (8, peaks.size()); ++i)
+            std::printf ("      %8.1f Hz  %6.1f dB\n", peaks[i].second * binHz, 10.0 * std::log10 (bandPower (peaks[i].second, 7) / fund));
+    }
+    AliasResult r;
+    r.fundDb = 10.0 * std::log10 (fund + 1e-300);
+    r.worstAliasDb = 10.0 * std::log10 (worstLobe / fund + 1e-30);
+    r.worstAliasHz = worstK * binHz;
+    r.totalAliasDb = 10.0 * std::log10 (alias / fund + 1e-30);
+    r.thdDb = 10.0 * std::log10 (harm / fund + 1e-30);
+    return r;
+}
+
+// J-A core alone at the oversampled rate: inharmonic energy below 20 kHz (no resampling filters)
+int cmdJaAlias()
+{
+    const JilesAtherton::Params cores[] = { { 1, 1, 0, 0.05, 0.85 }, { 1, 1, 0, 0.20, 0.60 } };
+    const char* names[] = { "ODD core", "HECTIC core" };
+    for (int c = 0; c < 2; ++c)
+        for (double amp : { 0.3, 0.6, 1.0, 1.5, 3.0 })
+            for (int refine = 1; refine < 2; ++refine)
+            {
+                std::printf ("%-11s H %.1f %-8s |", names[c], amp, refine ? "refined" : "plain");
+                for (int osf : { 1, 2, 4, 8, 16 })
+                {
+                    const double fs = kFs * osf;
+                    const int order = 16 + (int) std::round (std::log2 ((double) osf)), N = 1 << order;
+                    const double binHz = fs / N;
+                    const int k0 = (int) std::round ((std::getenv ("UVP_F0") ? std::atof (std::getenv ("UVP_F0")) : 9000.0) / binHz);
+                    const double f0 = k0 * binHz;
+                    JilesAtherton ja; ja.setParams (cores[c]); ja.reset();
+                    const int pre = N / 2;
+                    std::vector<float> buf ((size_t) (2 * N), 0.0f);
+                    static const double cw[7] = { 0.27105140069342, 0.43329793923448, 0.21812299954311, 0.06592544638803,
+                                                  0.01081174209837, 0.00077658482522, 0.00001388721735 };
+                    double wsum = 0.0;
+                    for (int i = 0; i < pre + N; ++i)
+                    {
+                        const double h = amp * std::sin (kTwoPi * f0 * (double) i / fs);
+                        const double m = refine ? ja.processAA (h) : ja.process (h);
+                        if (i >= pre)
+                        {
+                            const int j = i - pre;
+                            const double x = kTwoPi * j / N;
+                            double w = 0.0;
+                            for (int q = 0; q < 7; ++q) w += (q % 2 ? -1.0 : 1.0) * cw[q] * std::cos (q * x);
+                            wsum += w;
+                            buf[(size_t) j] = (float) (w * m);
+                        }
+                    }
+                    juce::dsp::FFT fft (order);
+                    fft.performFrequencyOnlyForwardTransform (buf.data(), true);
+                    double fund = 0.0, inh = 0.0;
+                    for (int k = 1; k < (int) (20000.0 / binHz); ++k)
+                    {
+                        const double pw = std::pow (buf[(size_t) k] / (wsum * 0.5), 2.0);
+                        const int nearest = (int) std::round ((double) k / k0) * k0;
+                        if (std::abs (k - k0) <= 12) fund += pw;
+                        else if (std::abs (k - nearest) > 12 && k > 12) inh += pw;
+                    }
+                    std::printf (" %2dx %6.1f", osf, 10.0 * std::log10 (inh / fund + 1e-30));
+                }
+                std::printf ("\n");
+            }
+    return 0;
+}
+
+int cmdAliasOne (int argc, char** argv)
+{
+    // aliasone <mode> <amount> <f0> <levelDbfs> <os>
+    if (argc < 7) return 1;
+    EngineParams p;
+    p.mode = std::atoi (argv[2]); p.amount = (float) std::atof (argv[3]); p.osIndex = std::atoi (argv[6]);
+    setenv ("UVP_ALIAS_DETAIL", "1", 1);
+    const auto r = measureAlias (p, std::atof (argv[4]), std::atof (argv[5]));
+    std::printf ("worst %.1f dB at %.1f Hz, total %.1f dB, THD %.1f dB\n", r.worstAliasDb, r.worstAliasHz, r.totalAliasDb, r.thdDb);
+    return 0;
+}
+
+int cmdAlias()
+{
+    const char* modeNames[] = { "EVEN", "ODD", "HECTIC" };
+    const char* osNames[] = { "1x", "2x", "4x", "8x", "16x" };
+    const double level = std::getenv ("UVP_LEVEL") ? std::atof (std::getenv ("UVP_LEVEL")) : -12.0;
+    std::printf ("Aliasing in 20 Hz-20 kHz relative to the output fundamental (tone at %.0f dBFS, 48 kHz)\n", level);
+    std::printf ("worst = strongest single inharmonic component, total = all inharmonic energy\n\n");
+    {
+        EngineParams p;   // amount 0: the measurement floor
+        const auto r = measureAlias (p, 15000.0, level);
+        std::printf ("baseline (amount 0, 15 kHz): worst %.1f dB, total %.1f dB, fundamental %.2f dBFS\n\n", r.worstAliasDb, r.totalAliasDb, r.fundDb);
+    }
+    for (double f0 : { 9000.0, 15000.0 })
+        for (int mode = 0; mode < 3; ++mode)
+            for (float a : { 8.0f, 11.0f })
+            {
+                std::printf ("%5.0f Hz %-6s amount %4.1f |", f0, modeNames[mode], a);
+                for (int os = 0; os < 5; ++os)
+                {
+                    EngineParams p;
+                    p.amount = a; p.mode = mode; p.osIndex = os;
+                    const auto r = measureAlias (p, f0, level);
+                    std::printf (" %s %6.1f/%6.1f", osNames[os], r.worstAliasDb, r.totalAliasDb);
+                }
+                std::printf ("\n");
+            }
+    std::printf ("\nTape alone (amount 0, transport frozen), 9 kHz:\n");
+    for (int m = 0; m < kNumTapeModels; ++m)
+        for (float d : { 0.0f, 12.0f })
+        {
+            std::printf ("  %-14s drive %+5.1f |", tapeModel (m).name, d);
+            for (int os = 0; os < 5; ++os)
+            {
+                EngineParams p;
+                p.tapeOn = true; p.tapeModel = m; p.tapeDriveDb = d; p.tapeTransport = false; p.osIndex = os;
+                const auto r = measureAlias (p, 9000.0, level);
+                std::printf (" %s %6.1f/%6.1f", osNames[os], r.worstAliasDb, r.totalAliasDb);
+            }
+            std::printf ("\n");
+        }
+    return 0;
+}
+
 int cmdCpu()
 {
     const Sig in = brightMix ((size_t) (kFs * 6));
@@ -744,6 +941,9 @@ int main (int argc, char** argv)
     if (cmd == "suppdbg") return cmdSuppDbg();
     if (cmd == "tape") return cmdTape();
     if (cmd == "cpu") return cmdCpu();
+    if (cmd == "alias") return cmdAlias();
+    if (cmd == "aliasone") return cmdAliasOne (argc, argv);
+    if (cmd == "jaalias") return cmdJaAlias();
     if (cmd == "agcheck") return cmdAgCheck();
     if (cmd == "display") return cmdDisplay();
     if (cmd == "calibtape") return cmdCalibTape();

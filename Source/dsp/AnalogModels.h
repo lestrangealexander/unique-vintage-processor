@@ -11,6 +11,14 @@ namespace uvp
 {
 
 //==============================================================================
+/** Catmull-Rom interpolation in a table with one guard point at the top (t[n + 1]): smooth
+    (continuous slope) so the curve has no corners at the table points. */
+inline double catmullRom (const double* t, int i, int lastIndex, double fr) noexcept
+{
+    const double ym1 = t[i > 0 ? i - 1 : 0], y0 = t[i], y1 = t[i + 1], y2 = t[std::min (i + 2, lastIndex)];
+    return y0 + 0.5 * fr * ((y1 - ym1) + fr * ((2.0 * ym1 - 5.0 * y0 + 4.0 * y1 - y2) + fr * (3.0 * (y0 - y1) + y2 - ym1)));
+}
+
 class TriodeStage
 {
 public:
@@ -124,8 +132,7 @@ private:
             if (x <= 0.0) return vp[0];
             if (x >= kSize) return vp[kSize];
             const int i = (int) x;
-            const double fr = x - i;
-            return vp[i] + fr * (vp[i + 1] - vp[i]);
+            return catmullRom (vp, i, kSize + 1, x - i);
         }
     };
 
@@ -154,7 +161,48 @@ public:
     };
 
     void setParams (const Params& p) noexcept { P = p; }
-    void reset() noexcept { M = 0.0; Hprev = 0.0; ManPrev = 0.0; dLPrev = 1.0 / 3.0; }
+    void reset() noexcept
+    {
+        M = 0.0; Hprev = 0.0; ManPrev = 0.0; dLPrev = 1.0 / 3.0;
+        hist0 = hist1 = 0.0;
+        saved = save();
+    }
+
+    /** process() with turning-point refinement, for oversampled audio.
+
+        The field is only known at sample instants, so a peak or trough of the signal normally
+        lands on the nearest sample and the loop tip is clipped by an amount that depends on
+        where the true peak fell between samples. That changes the branch the core then follows,
+        differently from cycle to cycle, which is heard as aliasing at a level that does not drop
+        with signal level. Here the true extremum is located with a parabola through the three
+        samples around it and the core is driven through it: when the peak fell before the
+        middle sample the path from the previous sample is re-integrated through the peak (no
+        latency; only that one middle sample keeps the old value). */
+    inline double processAA (double H) noexcept
+    {
+        const double hIn = hist1 - hist0, hOut = H - hist1;
+        if (hIn * hOut < 0.0)
+        {
+            const double den = hist0 - 2.0 * hist1 + H;
+            if (den != 0.0)
+            {
+                const double p = std::max (-0.5, std::min (0.5, 0.5 * (hist0 - H) / den));
+                const double hPeak = hist1 - 0.25 * (hist0 - H) * p;
+                if (p < 0.0)
+                {
+                    restore (saved);            // state before the middle sample
+                    process (hPeak);
+                    process (hist1);
+                }
+                else
+                    process (hPeak);
+            }
+        }
+        saved = save();
+        hist0 = hist1;
+        hist1 = H;
+        return process (H);
+    }
 
     /** Advance to field H (H moves linearly over the sample) and return the magnetisation.
 
@@ -255,7 +303,7 @@ public:
         for (int i = 0; i < warm + meas; ++i)
         {
             const double ph = kTwoPi * f0 * i / fsT;
-            const double m = ja.process (amp * std::sin (ph));
+            const double m = ja.processAA (amp * std::sin (ph));
             if (i >= warm) { re += m * std::sin (ph); im += m * std::cos (ph); }
         }
         const double a1 = 2.0 * std::sqrt (re * re + im * im) / meas;
@@ -314,7 +362,12 @@ private:
         const double x = aq * LangevinTable::kScale;
         const int i = (int) x;
         const double f = x - (double) i;
-        L = sgn * ((double) T.L[i] + f * (double) (T.L[i + 1] - T.L[i]));
+        // cubic Hermite with the exact slopes: continuous slope, so no tiny kinks at the table
+        // points for fast signals to turn into aliasing
+        const double h = 1.0 / LangevinTable::kScale;
+        const double y0 = T.L[i], y1 = T.L[i + 1], m0 = (double) T.dL[i] * h, m1 = (double) T.dL[i + 1] * h;
+        const double f2 = f * f, f3 = f2 * f;
+        L = sgn * ((2.0 * f3 - 3.0 * f2 + 1.0) * y0 + (f3 - 2.0 * f2 + f) * m0 + (-2.0 * f3 + 3.0 * f2) * y1 + (f3 - f2) * m1);
         dL = (double) T.dL[i] + f * (double) (T.dL[i + 1] - T.dL[i]);
     }
 
@@ -342,8 +395,14 @@ private:
         return P.Ms * L;
     }
 
+    struct State { double M, Hprev, ManPrev, dLPrev; };
+    State save() const noexcept { return { M, Hprev, ManPrev, dLPrev }; }
+    void restore (const State& s) noexcept { M = s.M; Hprev = s.Hprev; ManPrev = s.ManPrev; dLPrev = s.dLPrev; }
+
     Params P;
     double M = 0.0, Hprev = 0.0, ManPrev = 0.0, dLPrev = 1.0 / 3.0;
+    double hist0 = 0.0, hist1 = 0.0;
+    State saved { 0.0, 0.0, 0.0, 1.0 / 3.0 };
 };
 
 //==============================================================================
@@ -387,8 +446,7 @@ private:
             if (p <= 0.0) return y[0] + (x + kRange) * 1.0e-4;
             if (p >= kSize) return y[kSize] + (x - kRange) * 1.0e-4;
             const int i = (int) p;
-            const double fr = p - i;
-            return y[i] + fr * (y[i + 1] - y[i]);
+            return catmullRom (y, i, kSize + 1, p - i);
         }
     };
     static const Table& table()

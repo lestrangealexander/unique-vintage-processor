@@ -145,6 +145,7 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
     harmonics.setParams (p.amount, (HarmonicStage::Mode) std::max (0, std::min (2, p.mode)));
     tape.setOversampling (p.osIndex);
     tape.setParams (p.tapeOn && ! p.delta, p.tapeModel, p.tapeDriveDb);
+    tape.setTransportEnabled (p.tapeTransport);
 
     inGain.setTarget (dbToGain (p.inputDb));
     outGain.setTarget (dbToGain (p.outputDb));

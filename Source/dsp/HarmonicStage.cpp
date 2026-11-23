@@ -1,5 +1,6 @@
 // Unique Vintage Processor — harmonic stage
 #include "HarmonicStage.h"
+#include "Oversampler.h"
 #include "HarmonicMakeup.h"
 
 namespace uvp
@@ -38,8 +39,7 @@ void HarmonicStage::prepare (double sampleRate, int numChannels, int maxBlockSiz
     maxLatency = 0;
     for (int i = 0; i < kNumOsChoices; ++i)
     {
-        os[(size_t) i] = std::make_unique<juce::dsp::Oversampling<float>> (
-            (size_t) numCh, (size_t) i, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
+        os[(size_t) i] = makeOversampler ((size_t) numCh, i, fs);
         os[(size_t) i]->initProcessing ((size_t) maxBlock);
         osLatency[(size_t) i] = (int) std::lround (os[(size_t) i]->getLatencyInSamples());
         maxLatency = std::max (maxLatency, osLatency[(size_t) i]);
@@ -106,14 +106,14 @@ inline double HarmonicStage::runModel (ChannelModels& m, Mode mode, double e, do
             return m.triode.process (e * drive) / drive;
         case Odd:
         {
-            const double M = m.ja.process (e * drive);
+            const double M = m.ja.processAA (e * drive);
             return (M / jaNormOdd) / drive;
         }
         case Hectic:
         {
             // valve -> transformer -> silicon clipper, each stage unity gain for small signals
             const double v1 = m.triodeH.process (e * drive);
-            const double v2 = m.jaH.process (v1) / jaNormHectic;
+            const double v2 = m.jaH.processAA (v1) / jaNormHectic;
             const double v3 = DiodeClipper::process (v2 * 2.0);
             return v3 / (2.0 * drive);
         }

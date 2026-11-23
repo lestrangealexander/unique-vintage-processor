@@ -40,7 +40,7 @@ When you update to a newer build, replace both files, run the same `xattr` line 
 | **MIX** | Blend between dry and processed signal. |
 | **DELTA** | Lets you hear only what the vintage section changes. |
 | **BYPASS** | Smooth in/out switch with matched latency. |
-| **OS** | Oversampling for the harmonics: 1X, 2X, 4X (default), 8X or 16X. Tape runs at up to 8X. |
+| **OS** | Oversampling for the harmonics: 1X, 2X, 4X (default), 8X or 16X. Tape runs at up to 8X. EVEN is clean from 2X up; ODD and HECTIC at high AMOUNT with a bright source are cleanest at 8X or 16X. |
 | **MENU / SAVE** | User presets, stored in `~/Library/Audio/Presets/Sound Aquarium/Unique Vintage Processor`. MENU also has the interface size setting. |
 | **EXPAND** | Shows the analyser: input (yellow), output (line) and suppression (salmon). |
 

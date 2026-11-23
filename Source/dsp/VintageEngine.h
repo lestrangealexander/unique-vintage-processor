@@ -33,6 +33,7 @@ struct EngineParams
     bool tapeOn = false;
     int tapeModel = 1;
     float tapeDriveDb = 0.0f;
+    bool tapeTransport = true;   // test hook: false freezes wow/flutter/dropouts for steady-state measurements
 };
 
 struct DisplayFrame

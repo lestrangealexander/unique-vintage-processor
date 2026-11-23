@@ -1,5 +1,6 @@
 // Unique Vintage Processor — MORE COLOUR tape machines
 #include "TapeMachine.h"
+#include "Oversampler.h"
 
 namespace uvp
 {
@@ -32,8 +33,7 @@ void TapeMachine::prepare (double sampleRate, int numChannels, int maxBlockSize)
     maxOsLatency = 0;
     for (int i = 0; i <= kMaxOsIndex; ++i)
     {
-        os[(size_t) i] = std::make_unique<juce::dsp::Oversampling<float>> (
-            (size_t) numCh, (size_t) i, juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple, true, true);
+        os[(size_t) i] = makeOversampler ((size_t) numCh, i, fs);
         os[(size_t) i]->initProcessing ((size_t) maxBlock);
         osLatency[(size_t) i] = (int) std::lround (os[(size_t) i]->getLatencyInSamples());
         maxOsLatency = std::max (maxOsLatency, osLatency[(size_t) i]);
@@ -208,7 +208,7 @@ void TapeMachine::process (float* const* ch, int nCh, int n) noexcept
         for (int j = 0; j < nUp; ++j)
         {
             const double h = C.rec.process ((double) s[j]) * hd;
-            const double m = C.ja.process (h);
+            const double m = C.ja.processAA (h);
             double y = m * invNorm;
             y += d.elec2 * y * y;
             s[j] = (float) C.recInv.process (y);
@@ -310,7 +310,7 @@ double TapeMachine::measureThd3 (const TapeModelDef& d, double hDrive, double sr
     {
         const double ph = kTwoPi * f0 * i / fsT;
         const double h = rec.process (amp * std::sin (ph)) * hDrive;
-        const double y = inv.process (ja.process (h) / (norm * hDrive));
+        const double y = inv.process (ja.processAA (h) / (norm * hDrive));
         if (i >= warm)
         {
             r1 += y * std::sin (ph); i1 += y * std::cos (ph);
