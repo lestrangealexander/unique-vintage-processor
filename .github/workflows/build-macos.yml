@@ -3,7 +3,7 @@ name: macOS build (AU + VST3)
 on:
   push:
     branches: ['**']
-    paths-ignore: ['README.md']
+    paths-ignore: ['README.md', 'Tests/**']
   workflow_dispatch:
 
 permissions:

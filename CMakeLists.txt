@@ -105,6 +105,15 @@ if(UVP_BUILD_HARNESS)
     target_link_libraries(UVPSnapshot PRIVATE UVPAssets
         juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
 
+    # developer tool: plugin-level robustness checks
+    juce_add_console_app(UVPStress PRODUCT_NAME "UVPStress")
+    target_sources(UVPStress PRIVATE Tests/Stress.cpp Source/PluginProcessor.cpp Source/PluginEditor.cpp
+        Source/ui/Theme.cpp Source/ui/Widgets.cpp ${UVP_DSP_SOURCES})
+    target_include_directories(UVPStress PRIVATE Source)
+    target_compile_definitions(UVPStress PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+    target_link_libraries(UVPStress PRIVATE UVPAssets
+        juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+
     # developer probe: J-A solver sub-step statistics
     juce_add_console_app(UVPJaStat PRODUCT_NAME "UVPJaStat")
     target_sources(UVPJaStat PRIVATE Tests/JaStat.cpp ${UVP_DSP_SOURCES})
