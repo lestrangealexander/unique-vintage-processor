@@ -143,6 +143,18 @@ jobs:
     if: ${{ always() && (needs.mac.result == 'success' || needs.windows.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: CMakeLists.txt
+          sparse-checkout-cone-mode: false
+
+      - name: Release tag from the project version
+        id: ver
+        run: |
+          VERSION=$(sed -n 's/^project(UniqueVintageProcessor VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@v4
         with:
           path: art
@@ -163,8 +175,8 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Unique Vintage Processor (build ${{ github.run_number }})
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Unique Vintage Processor ${{ steps.ver.outputs.version }} (${{ steps.ver.outputs.tag }})
           target_commitish: ${{ github.sha }}
           fail_on_unmatched_files: false
           files: |
