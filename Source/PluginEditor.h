@@ -27,12 +27,13 @@ private:
     void showPresetMenu();
     void showOsMenu();
     void askPresetName();
+    bool savePreset (const juce::String& name);
 
     UniqueVintageProcessor& proc;
     uvp::ui::UVPLookAndFeel lnf;
     std::unique_ptr<Faceplate> face;
-    std::unique_ptr<juce::AlertWindow> nameDialog;
     bool expanded = false;
+    int savedFlashTicks = 0;
     float vuValue = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (UVPEditor)

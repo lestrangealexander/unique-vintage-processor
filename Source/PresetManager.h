@@ -29,6 +29,19 @@ public:
         return files;
     }
 
+    static juce::File fileFor (const juce::String& rawName)
+    {
+        return getFolder().getChildFile (juce::File::createLegalFileName (rawName.trim()) + kExtension);
+    }
+
+    /** "Preset 1", "Preset 2", ... whichever is the first not taken. */
+    static juce::String suggestName()
+    {
+        for (int n = 1;; ++n)
+            if (! fileFor ("Preset " + juce::String (n)).existsAsFile())
+                return "Preset " + juce::String (n);
+    }
+
     bool save (const juce::String& rawName)
     {
         const auto name = juce::File::createLegalFileName (rawName.trim());

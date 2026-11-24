@@ -8,11 +8,10 @@ namespace
 {
     juce::Typeface::Ptr face (Weight w)
     {
-        static const juce::Typeface::Ptr faces[4] = {
+        static const juce::Typeface::Ptr faces[3] = {
             juce::Typeface::createSystemTypefaceFor (BinaryData::DMSansMedium_ttf, (size_t) BinaryData::DMSansMedium_ttfSize),
             juce::Typeface::createSystemTypefaceFor (BinaryData::DMSansSemiBold_ttf, (size_t) BinaryData::DMSansSemiBold_ttfSize),
             juce::Typeface::createSystemTypefaceFor (BinaryData::DMSansBold_ttf, (size_t) BinaryData::DMSansBold_ttfSize),
-            juce::Typeface::createSystemTypefaceFor (BinaryData::DMSansBlackItalic_ttf, (size_t) BinaryData::DMSansBlackItalic_ttfSize),
         };
         return faces[(int) w];
     }
@@ -26,13 +25,19 @@ juce::Font font (Weight w, float sizePx, float letterSpacingPx)
     return f;
 }
 
+float textWidth (const juce::Font& f, const juce::String& s)
+{
+    // letter-spacing also follows the last glyph; leave it out when measuring so centring matches the mockup
+    float w = juce::GlyphArrangement::getStringWidth (f, s);
+    if (s.isNotEmpty()) w -= f.getExtraKerningFactor() * f.getHeight();
+    return w;
+}
+
 void drawText (juce::Graphics& g, const juce::String& s, float x, float baselineY, const juce::Font& f, juce::Colour c, Anchor a)
 {
     g.setColour (c);
     g.setFont (f);
-    // letter-spacing also follows the last glyph; leave it out when measuring so centring matches the mockup
-    float w = juce::GlyphArrangement::getStringWidth (f, s);
-    if (s.isNotEmpty()) w -= f.getExtraKerningFactor() * f.getHeight();
+    const float w = textWidth (f, s);
     float x0 = x;
     if (a == Anchor::Middle) x0 = x - 0.5f * w;
     else if (a == Anchor::End) x0 = x - w;

@@ -131,6 +131,67 @@ void UVPLookAndFeel::drawButtonBackground (juce::Graphics& g, juce::Button& b, c
     g.fillRoundedRectangle (r, r.getHeight() * 0.5f);
 }
 
+void UVPLookAndFeel::fillTextEditorBackground (juce::Graphics& g, int w, int h, juce::TextEditor& te)
+{
+    g.setColour (te.findColour (juce::TextEditor::backgroundColourId).withAlpha (1.0f));
+    g.fillRoundedRectangle (0.0f, 0.0f, (float) w, (float) h, std::min (10.0f, (float) h * 0.5f));
+}
+
+void UVPLookAndFeel::drawTextEditorOutline (juce::Graphics& g, int w, int h, juce::TextEditor& te)
+{
+    const auto c = te.findColour (te.hasKeyboardFocus (true) ? juce::TextEditor::focusedOutlineColourId
+                                                              : juce::TextEditor::outlineColourId);
+    if (c.isTransparent()) return;
+    g.setColour (c);
+    g.drawRoundedRectangle (0.75f, 0.75f, (float) w - 1.5f, (float) h - 1.5f, std::min (10.0f, (float) h * 0.5f) - 0.75f, 1.5f);
+}
+
+//==============================================================================
+ValueEntry::ValueEntry()
+{
+    setJustification (juce::Justification::centred);
+    setFont (font (Weight::SemiBold, 14.0f, 0.3f));
+    setIndents (6, 0);
+    setBorder ({});
+    setSelectAllWhenFocused (true);
+    setScrollbarsShown (false);
+    setPopupMenuEnabled (false);
+    setInputRestrictions (16);
+    // not quite opaque, so the rounded corners show the faceplate behind them
+    setColour (juce::TextEditor::backgroundColourId, col::white.withAlpha (0.995f));
+    setColour (juce::TextEditor::outlineColourId, col::salmonDk);
+    setColour (juce::TextEditor::focusedOutlineColourId, col::ink.withAlpha (0.45f));
+    setColour (juce::TextEditor::textColourId, col::ink);
+    setColour (juce::TextEditor::highlightColourId, col::yellow);
+    setColour (juce::TextEditor::highlightedTextColourId, col::ink);
+    onReturnKey = [this] { dismiss (true); };
+    onEscapeKey = [this] { dismiss (false); };
+    onFocusLost = [this] { dismiss (true); };
+    setVisible (false);
+}
+
+void ValueEntry::open (juce::Rectangle<int> area, const juce::String& text, std::function<void (const juce::String&)> onCommit)
+{
+    dismiss (true); // finish anything still open first
+    commit = std::move (onCommit);
+    setBounds (area);
+    setText (text, false);
+    setVisible (true);
+    toFront (false);
+    grabKeyboardFocus();
+    selectAll();
+}
+
+void ValueEntry::dismiss (bool apply)
+{
+    if (! isVisible()) return;
+    auto cb = std::move (commit);
+    commit = nullptr;
+    const auto t = getText();
+    setVisible (false);
+    if (apply && cb != nullptr) cb (t);
+}
+
 //==============================================================================
 ParamKnob::ParamKnob (const juce::String& n, float bodyRadius, float ringWidth, bool bipolar, float labelBaselineFromCentre,
                       float lSize, float lSpacing, Weight lWeight, bool centre)
@@ -176,24 +237,21 @@ void ParamKnob::paint (juce::Graphics& g)
 }
 
 //==============================================================================
-OasisButton::OasisButton (const juce::String& label, float textSize) : juce::Button (label), size (textSize)
+ModeButton::ModeButton (const juce::String& label) : juce::Button (label)
 {
     setClickingTogglesState (false);
 }
 
-void OasisButton::paintButton (juce::Graphics& g, bool over, bool down)
+void ModeButton::paintButton (juce::Graphics& g, bool over, bool down)
 {
     const bool on = getToggleState();
-    auto b = getLocalBounds().toFloat();
-    auto body = on ? col::ink : col::white;
-    const auto line = on ? col::white : col::ink;
-    if (! on && (over || down)) body = col::white.interpolatedWith (col::yellow, down ? 0.6f : 0.4f);
-    if (on && over) body = col::ink.brighter (0.12f);
-    g.setColour (body);
-    g.fillRoundedRectangle (b, 5.0f);
-    g.setColour (line);
-    g.drawRoundedRectangle (b.reduced (3.6f), 2.4f, 1.5f);
-    drawText (g, getButtonText(), b.getCentreX(), b.getCentreY() + size * 0.355f, font (Weight::BlackItalic, size, -0.4f), line);
+    const auto b = getLocalBounds().toFloat();
+    const float body = on ? 1.0f : (down ? 0.85f : (over ? 0.68f : 0.45f));
+    g.setColour (col::white.withAlpha (body));
+    g.fillRoundedRectangle (b, 12.0f);
+    constexpr float size = 15.0f;
+    drawText (g, getButtonText(), b.getCentreX(), b.getCentreY() + size * 0.36f, font (Weight::Bold, size, 3.0f),
+              col::ink.withAlpha (on ? 1.0f : 0.6f));
 }
 
 PillButton::PillButton (const juce::String& label, float textSize, float sp, Weight w)
@@ -203,8 +261,8 @@ void PillButton::paintButton (juce::Graphics& g, bool over, bool down)
 {
     const bool on = getToggleState();
     auto b = getLocalBounds().toFloat();
-    auto body = on ? col::ink : col::white;
-    if (! on && (over || down)) body = col::white.interpolatedWith (col::yellow, down ? 0.7f : 0.45f);
+    auto body = on ? col::ink : offBody;
+    if (! on && (over || down)) body = offBody.interpolatedWith (offBody == col::white ? col::yellow : col::yellowLn, down ? 0.7f : 0.45f);
     if (on && over) body = col::ink.brighter (0.12f);
     g.setColour (body);
     g.fillRoundedRectangle (b, b.getHeight() * 0.5f);
@@ -382,32 +440,34 @@ void Analyser::paint (juce::Graphics& g)
     for (auto& [f, s] : labels)
         drawText (g, s, freqToX (f), cardY0 + 22.0f, font (Weight::Medium, 11.5f, 0.6f), col::ink.withAlpha (0.55f));
 
-    const float hp = freqToX (hpfOn ? juce::jlimit (20.0f, 20000.0f, hpfHz) : 20.0f);
-    if (hpfOn)
-    {
-        g.setColour (col::salmon.withAlpha (0.12f));
+    // the FILTER band: shade what is left untouched on either side of it
+    const bool lpIn = filterOn && lpfOn;
+    const float hp = freqToX (filterOn ? juce::jlimit (20.0f, 20000.0f, hpfHz) : 20.0f);
+    const float lp = std::max (hp, freqToX (lpIn ? juce::jlimit (20.0f, 20000.0f, lpfHz) : 20000.0f));
+    g.setColour (col::salmon.withAlpha (0.12f));
+    if (filterOn && hp > kX0)
         g.fillRect (juce::Rectangle<float> (kX0, cardY0 + 30.0f, hp - kX0, cardY1 - cardY0 - 30.0f));
-    }
+    if (lpIn && lp < kX1)
+        g.fillRect (juce::Rectangle<float> (lp, cardY0 + 30.0f, kX1 - lp, cardY1 - cardY0 - 30.0f));
 
     if (hasData)
     {
         juce::Path inFill, inLine, outLo, outHi, grFill, grLine;
         juce::Point<float> prevOut;
+        int prevRegion = -1;
         for (int p = 0; p < K; ++p)
         {
             const float x = pointX (p), yi = dbY (in[p]), yo = dbY (out[p]);
             if (p == 0) { inFill.startNewSubPath (x, cardY1); inFill.lineTo (x, yi); inLine.startNewSubPath (x, yi); }
             else { inFill.lineTo (x, yi); inLine.lineTo (x, yi); }
-            // output: faint below the HPF (untouched there unless tape is on), solid above it
-            auto& op = (x < hp) ? outLo : outHi;
-            if (op.isEmpty())
-            {
-                if (&op == &outHi && p > 0) op.startNewSubPath (prevOut); else op.startNewSubPath (x, yo);
-                if (&op == &outHi && p > 0) op.lineTo (x, yo);
-            }
-            else
-                op.lineTo (x, yo);
+            // output: faint outside the FILTER band (untouched there unless tape is on), solid inside it
+            const int region = (x >= hp && x <= lp) ? 1 : 0;
+            auto& op = region == 1 ? outHi : outLo;
+            if (region != prevRegion)
+                op.startNewSubPath (p > 0 ? prevOut : juce::Point<float> (x, yo));
+            op.lineTo (x, yo);
             prevOut = { x, yo };
+            prevRegion = region;
         }
         inFill.lineTo (kX1, cardY1);
         inFill.closeSubPath();
@@ -435,16 +495,18 @@ void Analyser::paint (juce::Graphics& g)
         g.strokePath (grLine, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     }
 
-    if (hpfOn)
+    auto dashAt = [&] (float x)
     {
         juce::Path dash, dashed;
-        dash.startNewSubPath (hp, cardY0);
-        dash.lineTo (hp, cardY1);
+        dash.startNewSubPath (x, cardY0);
+        dash.lineTo (x, cardY1);
         const float pattern[] = { 4.0f, 4.0f };
         juce::PathStrokeType (1.2f).createDashedStroke (dashed, dash, pattern, 2);
         g.setColour (col::ink.withAlpha (0.4f));
         g.fillPath (dashed);
-    }
+    };
+    if (filterOn && hp > kX0 + 0.5f) dashAt (hp);
+    if (lpIn) dashAt (lp);
 
     const float lx = kX0 + 2.0f, ly = cardY1 - 9.0f;
     g.setColour (col::yellow);
@@ -463,6 +525,137 @@ void Analyser::paint (juce::Graphics& g)
     g.fillRoundedRectangle (lx + 160.0f, ly - 7.0f, 12.0f, 7.0f, 2.0f);
     drawText (g, "SUPPRESSION", lx + 178.0f, ly, lf, col::ink.withAlpha (0.55f), Anchor::Start);
     g.restoreState();
+}
+
+//==============================================================================
+FilterRange::FilterRange (juce::RangedAudioParameter& hpf, juce::RangedAudioParameter& lpf, float lpfTopHz)
+    : hp (hpf), lp (lpf), lpTop (lpfTopHz)
+{
+    hpAtt = std::make_unique<juce::ParameterAttachment> (hp, [this] (float v) { hpHz = v; repaint(); });
+    lpAtt = std::make_unique<juce::ParameterAttachment> (lp, [this] (float v) { lpHz = v; repaint(); });
+    hpAtt->sendInitialUpdate();
+    lpAtt->sendInitialUpdate();
+}
+
+float FilterRange::handleX (int handle) const noexcept
+{
+    return Analyser::freqToX (juce::jlimit (20.0f, lpTop, handle == 0 ? hpHz : lpHz));
+}
+
+float FilterRange::clampFor (int handle, float hz) const noexcept
+{
+    if (handle == 0)
+        return juce::jlimit (20.0f, std::min (kHpfMaxHz, lpHz), hz);
+    return juce::jlimit (std::min (lpTop, std::max (20.0f, hpHz)), lpTop, hz);
+}
+
+int FilterRange::nearestHandle (float x) const noexcept
+{
+    const float xh = handleX (0), xl = handleX (1);
+    const float dh = std::abs (x - xh), dl = std::abs (x - xl);
+    if (std::abs (dh - dl) < 0.5f)
+        return x < xh ? 0 : 1;
+    return dh < dl ? 0 : 1;
+}
+
+bool FilterRange::hitTest (int x, int y)
+{
+    return x >= 58 && y >= 10; // the FILTER switch sits just left of the track
+}
+
+void FilterRange::paint (juce::Graphics& g)
+{
+    const float y = kTrackY;
+    juce::Path track;
+    track.startNewSubPath (Analyser::freqToX (20.0f), y);
+    track.lineTo (Analyser::freqToX (lpTop), y);
+    g.setColour (col::salmonDk);
+    strokeRound (g, track, 6.0f);
+
+    const float xh = handleX (0), xl = handleX (1);
+    if (xl > xh + 0.5f)
+    {
+        juce::Path band; // what gets processed
+        band.startNewSubPath (xh, y);
+        band.lineTo (xl, y);
+        g.setColour (col::white);
+        strokeRound (g, band, 6.0f);
+    }
+    for (float x : { xh, xl })
+    {
+        g.setColour (col::white);
+        g.fillEllipse (x - 11.0f, y - 11.0f, 22.0f, 22.0f);
+        g.setColour (col::ink);
+        g.fillEllipse (x - 3.2f, y - 3.2f, 6.4f, 6.4f);
+    }
+
+    // values above the handles, nudged apart when they meet and kept on the faceplate
+    const auto f = font (Weight::SemiBold, 11.0f, 1.2f);
+    const juce::String t0 = hp.getText (hp.convertTo0to1 (hpHz), 0).toUpperCase();
+    const juce::String t1 = isLowPassOff() ? juce::String ("OFF") : lp.getText (lp.convertTo0to1 (lpHz), 0).toUpperCase();
+    const float w0 = textWidth (f, t0), w1 = textWidth (f, t1), gap = 12.0f;
+    float c0 = xh, c1 = xl;
+    const float overlap = (c0 + 0.5f * w0 + gap) - (c1 - 0.5f * w1);
+    if (overlap > 0.0f) { c0 -= 0.5f * overlap; c1 += 0.5f * overlap; }
+    c1 = std::min (c1, (float) getWidth() - 4.0f - 0.5f * w1);
+    c0 = std::min (c0, c1 - 0.5f * (w0 + w1) - gap);
+    c0 = std::max (c0, 4.0f + 0.5f * w0);
+    drawText (g, t0, c0, y - 17.0f, f, col::ink.withAlpha (0.7f));
+    drawText (g, t1, c1, y - 17.0f, f, col::ink.withAlpha (isLowPassOff() ? 0.45f : 0.7f));
+}
+
+void FilterRange::mouseDown (const juce::MouseEvent& e)
+{
+    dragging = -1;
+    if (e.mods.isPopupMenu()) return;
+    const int h = nearestHandle (e.position.x);
+    if (e.mods.isAltDown()) // reset: high-pass to its default, low-pass back off at the top
+    {
+        auto& p = paramFor (h);
+        attachmentFor (h).setValueAsCompleteGesture (clampFor (h, p.convertFrom0to1 (p.getDefaultValue())));
+        return;
+    }
+    const bool stacked = std::abs (handleX (0) - handleX (1)) < 1.0f && std::abs (e.position.x - handleX (0)) < 14.0f;
+    dragging = stacked ? -2 : h;
+    downX = lastMouseX = e.position.x;
+    dragX = stacked ? handleX (0) : handleX (h);
+    if (dragging >= 0) attachmentFor (dragging).beginGesture();
+}
+
+void FilterRange::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging == -2)
+    {
+        // two handles on the same spot: dragging left takes the high-pass, right the low-pass
+        const float dx = e.position.x - downX;
+        if (std::abs (dx) < 2.0f) return;
+        dragging = dx < 0.0f ? 0 : 1;
+        attachmentFor (dragging).beginGesture();
+    }
+    if (dragging < 0) return;
+    dragX += (e.position.x - lastMouseX) * (e.mods.isShiftDown() ? 0.2f : 1.0f); // shift: fine
+    lastMouseX = e.position.x;
+    attachmentFor (dragging).setValueAsPartOfGesture (clampFor (dragging, Analyser::xToFreq (dragX)));
+}
+
+void FilterRange::mouseUp (const juce::MouseEvent&)
+{
+    if (dragging >= 0) attachmentFor (dragging).endGesture();
+    dragging = -1;
+}
+
+void FilterRange::mouseDoubleClick (const juce::MouseEvent& e)
+{
+    const int h = nearestHandle (e.position.x);
+    if (onDoubleClick != nullptr) onDoubleClick (h, { handleX (h), kTrackY });
+}
+
+void FilterRange::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    const float dy = w.isReversed ? -w.deltaY : w.deltaY;
+    if (std::abs (dy) < 1.0e-4f) return;
+    const int h = nearestHandle (e.position.x);
+    attachmentFor (h).setValueAsCompleteGesture (clampFor (h, getHz (h) * std::pow (2.0f, 1.5f * dy)));
 }
 
 } // namespace uvp::ui

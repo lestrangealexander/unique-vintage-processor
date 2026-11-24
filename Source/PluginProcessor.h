@@ -14,7 +14,8 @@ inline constexpr const char* amount = "amount";
 inline constexpr const char* mode = "mode";
 inline constexpr const char* q = "q";
 inline constexpr const char* hpfFreq = "hpfFreq";
-inline constexpr const char* hpfOn = "hpfOn";
+inline constexpr const char* hpfOn = "hpfOn";          // the FILTER switch (both edges)
+inline constexpr const char* lpfFreq = "lpfFreq";      // at the very top = off
 inline constexpr const char* oversampling = "oversampling";
 inline constexpr const char* mix = "mix";
 inline constexpr const char* delta = "delta";
@@ -63,6 +64,10 @@ public:
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
+    /** The FILTER low-pass sits at the top of its range when it is off. */
+    static constexpr float kLpfTopHz = 20000.0f;
+    static bool lpfEngaged (float hz) noexcept { return hz < kLpfTopHz - 10.0f; }
+
 private:
     uvp::VintageEngine engine;
     juce::AudioProcessorParameter* bypassParam = nullptr;
@@ -71,6 +76,7 @@ private:
     std::atomic<float>* pAutoGain = nullptr; std::atomic<float>* pAmount = nullptr;
     std::atomic<float>* pMode = nullptr;   std::atomic<float>* pQ = nullptr;
     std::atomic<float>* pHpfFreq = nullptr; std::atomic<float>* pHpfOn = nullptr;
+    std::atomic<float>* pLpfFreq = nullptr;
     std::atomic<float>* pOs = nullptr;     std::atomic<float>* pMix = nullptr;
     std::atomic<float>* pDelta = nullptr;  std::atomic<float>* pBypass = nullptr;
     std::atomic<float>* pMoreColour = nullptr; std::atomic<float>* pTapeModel = nullptr;

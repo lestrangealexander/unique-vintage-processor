@@ -1,11 +1,12 @@
 // Unique Vintage Processor — complete signal chain
 #include "VintageEngine.h"
 #include "AutoGainTables.h"
+#include "AutoGainLpfTables.h"
 
 namespace uvp
 {
 
-float VintageEngine::vintageCompDb (int mode, float amount, float hpfHz, bool hpfOn, float inputDb) noexcept
+float VintageEngine::tableCompDb (int mode, float amount, float hpfHz, bool hpfOn, float inputDb) noexcept
 {
     using namespace agc;
     const auto& T = vintageTable();
@@ -41,6 +42,100 @@ float VintageEngine::vintageCompDb (int mode, float amount, float hpfHz, bool hp
     return lerpH (i0) + fi * (lerpH (i1) - lerpH (i0));
 }
 
+float VintageEngine::vintageCompDb (int mode, float amount, float hpfHz, bool hpfOn, float lpfHz, bool lpfOn, float inputDb) noexcept
+{
+    const float full = tableCompDb (mode, amount, hpfHz, hpfOn, inputDb);
+    if (! lpfOn) return full;
+    const float edge = std::max (lpfHz, hpfOn ? hpfHz : 20.0f);
+    if (edge >= 20000.0f) return full;
+    constexpr float topKnot = agc::kLpfHz[agc::kLpfSteps - 1];
+    if (edge > topKnot)
+    {
+        // above the last calibrated low-pass point, ease from its value to the open-band value at 20 kHz
+        const float atKnot = bandCompDb (mode, amount, hpfHz, hpfOn, topKnot, inputDb, full);
+        const float t = std::log (edge / topKnot) / std::log (20000.0f / topKnot);
+        return atKnot + t * (full - atKnot);
+    }
+    return bandCompDb (mode, amount, hpfHz, hpfOn, edge, inputDb, full);
+}
+
+float VintageEngine::bandCompDb (int mode, float amount, float hpfHz, bool hpfOn, float edge, float inputDb, float full) noexcept
+{
+    // The tables were calibrated with the band open to the top. With the low-pass edge in, take away
+    // what the part above it contributed, treating the loudness changes of the two parts as adding
+    // in power: R(band) = 1 + R(from hpf up) - R(from lpf up), with R = 10^(-comp/10); then add the
+    // calibrated residual for what that model misses (strong saturation of a narrow band).
+    auto toR = [] (float compDb) { return std::pow (10.0f, -0.1f * compDb); };
+    float rAbove;
+    if (edge <= agc::kHpfHz[8])
+        rAbove = toR (tableCompDb (mode, amount, edge, true, inputDb));
+    else
+    {
+        const float t = std::log (edge / agc::kHpfHz[8]) / std::log (20000.0f / agc::kHpfHz[8]);
+        const float r15 = toR (tableCompDb (mode, amount, agc::kHpfHz[8], true, inputDb));
+        rAbove = r15 + t * (1.0f - r15);
+    }
+    const float rBand = std::max (0.05f, 1.0f + toR (full) - rAbove);
+    const float model = -10.0f * std::log10 (rBand);
+    return useLpfResidual ? model + lpfResidualDb (mode, amount, hpfHz, hpfOn, edge, inputDb) : model;
+}
+
+float VintageEngine::lpfResidualDb (int mode, float amount, float hpfHz, bool hpfOn, float lpfHz, float inputDb) noexcept
+{
+    // what the model above misses (strong saturation of a narrow band), measured offline per knot
+    using namespace agc;
+    const auto& T = lpfResidualTable();
+    mode = std::max (0, std::min (2, mode));
+
+    const float ii = std::max (0.0f, std::min ((float) (kInputSteps - 1), (inputDb + 18.0f) / 6.0f));
+    const int i0 = (int) ii, i1 = std::min (kInputSteps - 1, i0 + 1);
+    const float fi = ii - (float) i0;
+
+    int h0 = 0, h1 = 0;
+    float fh = 0.0f;
+    if (hpfOn)
+    {
+        const float lf = std::log (std::max (kHpfHz[0], std::min (kHpfHz[8], hpfHz)));
+        int j = 0;
+        while (j < 7 && lf > std::log (kHpfHz[j + 1])) ++j;
+        h0 = 1 + j;
+        h1 = 2 + j;
+        fh = std::max (0.0f, std::min (1.0f, (lf - std::log (kHpfHz[j])) / (std::log (kHpfHz[j + 1]) - std::log (kHpfHz[j]))));
+    }
+
+    // low-pass knots in log frequency; above the last one the correction fades out by 20 kHz
+    int l0 = 0, l1 = 0;
+    float fl = 0.0f, fade = 1.0f;
+    const float lf = std::log (std::max (kLpfHz[0], lpfHz));
+    if (lpfHz >= kLpfHz[kLpfSteps - 1])
+    {
+        l0 = l1 = kLpfSteps - 1;
+        fade = 1.0f - std::max (0.0f, std::min (1.0f, std::log (lpfHz / kLpfHz[kLpfSteps - 1]) / std::log (20000.0f / kLpfHz[kLpfSteps - 1])));
+    }
+    else
+    {
+        int j = 0;
+        while (j < kLpfSteps - 2 && lf > std::log (kLpfHz[j + 1])) ++j;
+        l0 = j;
+        l1 = j + 1;
+        fl = std::max (0.0f, std::min (1.0f, (lf - std::log (kLpfHz[j])) / (std::log (kLpfHz[j + 1]) - std::log (kLpfHz[j]))));
+    }
+
+    int a0 = 0;
+    while (a0 < kLpfAmountSteps - 2 && amount > kLpfAmounts[a0 + 1]) ++a0;
+    const int a1 = a0 + 1;
+    const float fa = std::max (0.0f, std::min (1.0f, (amount - kLpfAmounts[a0]) / (kLpfAmounts[a1] - kLpfAmounts[a0])));
+
+    auto at = [&] (int i, int h, int l)
+    {
+        const auto& row = T[mode][i][h][l];
+        return row[a0] + fa * (row[a1] - row[a0]);
+    };
+    auto atL = [&] (int i, int h) { return at (i, h, l0) + fl * (at (i, h, l1) - at (i, h, l0)); };
+    auto atH = [&] (int i) { return atL (i, h0) + fh * (atL (i, h1) - atL (i, h0)); };
+    return fade * (atH (i0) + fi * (atH (i1) - atH (i0)));
+}
+
 float VintageEngine::tapeCompDb (int model, float driveDb) noexcept
 {
     using namespace agc;
@@ -66,12 +161,12 @@ void VintageEngine::prepare (double sampleRate, int maxBlockSize, int numChannel
     totalLatency = vintageLatency + tape.getLatencySamples();
 
     dryIn.setSize (numCh, maxBlock, false, false, true);
-    lowBuf.setSize (numCh, maxBlock, false, false, true);
-    highBuf.setSize (numCh, maxBlock, false, false, true);
+    restBuf.setSize (numCh, maxBlock, false, false, true);
+    bandBuf.setSize (numCh, maxBlock, false, false, true);
     for (int c = 0; c < 2; ++c)
     {
-        lowAlign[(size_t) c].prepare (harmonics.getLatencySamples() + 4);
-        lowAlign[(size_t) c].setDelay (harmonics.getLatencySamples());
+        restAlign[(size_t) c].prepare (harmonics.getLatencySamples() + 4);
+        restAlign[(size_t) c].setDelay (harmonics.getLatencySamples());
         dryForMix[(size_t) c].prepare (vintageLatency + 4);
         dryForMix[(size_t) c].setDelay (vintageLatency);
         dryForBypass[(size_t) c].prepare (totalLatency + 4);
@@ -112,7 +207,7 @@ void VintageEngine::reset()
     split.reset();
     harmonics.reset();
     tape.reset();
-    for (auto* arr : { &lowAlign, &dryForMix, &dryForBypass })
+    for (auto* arr : { &restAlign, &dryForMix, &dryForBypass })
         for (auto& d : *arr) d.reset();
     std::fill (outRing.begin(), outRing.end(), 0.0f);
     std::fill (outPow.begin(), outPow.end(), 0.0f);
@@ -139,8 +234,8 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
 
     const auto& p = params;
     // ---- parameters into the modules
-    suppressor.setParams ({ p.amount, p.q, p.hpfHz, p.hpfOn });
-    split.setCutoff (p.hpfHz, p.hpfOn);
+    suppressor.setParams ({ p.amount, p.q, p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn });
+    split.setBand (p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn);
     harmonics.setOversampling (p.osIndex);
     harmonics.setParams (p.amount, (HarmonicStage::Mode) std::max (0, std::min (2, p.mode)));
     tape.setOversampling (p.osIndex);
@@ -154,7 +249,7 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
     bypassRamp.setTarget (p.bypass ? 1.0f : 0.0f);
     float comp = 1.0f;
     if (p.autoGain)
-        comp = dbToGain (-p.inputDb + vintageCompDb (p.mode, p.amount, p.hpfHz, p.hpfOn, p.inputDb));
+        comp = dbToGain (-p.inputDb + vintageCompDb (p.mode, p.amount, p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn, p.inputDb));
     compRamp.setTarget (comp);
     float tapeGain = 1.0f;
     if (p.tapeOn && ! p.delta)
@@ -172,14 +267,14 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
         for (int c = 0; c < nCh; ++c) ch[c][i] *= g;
     }
 
-    // ---- 2. resonance suppression (full band, masked to the HPF region)
+    // ---- 2. resonance suppression (full band, masked to the FILTER band)
     suppressor.process (ch, nCh, n);
 
-    // ---- 3. split, 4. harmonics on the top band
-    float* low[2] = { lowBuf.getWritePointer (0), nCh > 1 ? lowBuf.getWritePointer (1) : nullptr };
-    float* high[2] = { highBuf.getWritePointer (0), nCh > 1 ? highBuf.getWritePointer (1) : nullptr };
-    split.process (ch, low, high, nCh, n);
-    harmonics.process (high, nCh, n);
+    // ---- 3. band split, 4. harmonics on the FILTER band
+    float* rest[2] = { restBuf.getWritePointer (0), nCh > 1 ? restBuf.getWritePointer (1) : nullptr };
+    float* band[2] = { bandBuf.getWritePointer (0), nCh > 1 ? bandBuf.getWritePointer (1) : nullptr };
+    split.process (ch, rest, band, nCh, n);
+    harmonics.process (band, nCh, n);
 
     // ---- 5. sum, auto gain, mix, delta
     for (int i = 0; i < n; ++i)
@@ -189,7 +284,7 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
         const float dl = deltaRamp.next();
         for (int c = 0; c < nCh; ++c)
         {
-            const float wet = (lowAlign[(size_t) c].process (low[c][i]) + high[c][i]) * cg;
+            const float wet = (restAlign[(size_t) c].process (rest[c][i]) + band[c][i]) * cg;
             const float dry = dryForMix[(size_t) c].process (dryIn.getSample (c, i));
             const float mixed = dry + mx * (wet - dry);
             ch[c][i] = mixed - dl * dry; // delta: only what the vintage section changed

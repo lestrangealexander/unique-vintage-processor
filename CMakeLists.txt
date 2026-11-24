@@ -5,7 +5,7 @@ if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Universal binary")
 endif()
 
-project(UniqueVintageProcessor VERSION 0.5.0 LANGUAGES C CXX)
+project(UniqueVintageProcessor VERSION 0.6.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,7 +44,6 @@ juce_add_binary_data(UVPAssets SOURCES
     Resources/DMSans-Medium.ttf
     Resources/DMSans-SemiBold.ttf
     Resources/DMSans-Bold.ttf
-    Resources/DMSans-BlackItalic.ttf
     Resources/Pegasus.svg)
 
 juce_add_plugin(UniqueVintageProcessor

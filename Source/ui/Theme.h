@@ -15,12 +15,15 @@ namespace col
     inline const juce::Colour white    { 0xFFFFFFFF };
 } // namespace col
 
-enum class Weight { Medium, SemiBold, Bold, BlackItalic };
+enum class Weight { Medium, SemiBold, Bold };
 
 /** DM Sans at a CSS-style size (px) with CSS-style letter-spacing (px). */
 juce::Font font (Weight w, float sizePx, float letterSpacingPx = 0.0f);
 
 enum class Anchor { Start, Middle, End };
+
+/** Width of a single line as drawText lays it out (trailing letter-spacing left out). */
+float textWidth (const juce::Font& f, const juce::String& s);
 
 /** Single line of text with its baseline at y (like SVG text). */
 void drawText (juce::Graphics& g, const juce::String& s, float x, float baselineY, const juce::Font& f,

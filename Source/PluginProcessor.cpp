@@ -1,6 +1,7 @@
 // Unique Vintage Processor — Sound Aquarium
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "ParamText.h"
 
 namespace
 {
@@ -49,8 +50,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout UniqueVintageProcessor::crea
                     [] (float v, int) { return String (v, 1); }));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::mode, 1 }, "Harmonics", StringArray { "Even", "Odd", "Hectic" }, 0));
     layout.add (fl (ParamIDs::q, "Q", qRange(), 6.0f, [] (float v, int) { return String (v, v < 10.0f ? 2 : 1); }));
-    layout.add (fl (ParamIDs::hpfFreq, "HPF", logRange (20.0f, 15000.0f), 4000.0f, hzText));
-    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::hpfOn, 1 }, "HPF On", true));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::hpfFreq, 1 }, "HPF", logRange (20.0f, 15000.0f), 4000.0f,
+                                                       AudioParameterFloatAttributes().withStringFromValueFunction (hzText)
+                                                           .withValueFromStringFunction ([] (const String& t)
+                                                           { return uvp::parseTypedValue (t, true).value_or (4000.0f); })));
+    layout.add (std::make_unique<AudioParameterBool> (ParameterID { ParamIDs::hpfOn, 1 }, "Filter On", true));
+    layout.add (std::make_unique<AudioParameterFloat> (ParameterID { ParamIDs::lpfFreq, 2 }, "LPF", logRange (20.0f, kLpfTopHz), kLpfTopHz,
+                                                       AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int n)
+                                                           { return lpfEngaged (v) ? hzText (v, n) : String ("Off"); })
+                                                           .withValueFromStringFunction ([] (const String& t)
+                                                           { return uvp::parseTypedValue (t, true, kLpfTopHz).value_or (kLpfTopHz); })));
     layout.add (std::make_unique<AudioParameterChoice> (ParameterID { ParamIDs::oversampling, 1 }, "Oversampling",
                                                         StringArray { "1x", "2x", "4x", "8x", "16x" }, 2));
     layout.add (fl (ParamIDs::mix, "Mix", { 0.0f, 100.0f, 0.1f }, 100.0f, [] (float v, int) { return String (juce::roundToInt (v)) + " %"; }));
@@ -78,6 +87,7 @@ UniqueVintageProcessor::UniqueVintageProcessor()
     pQ = apvts.getRawParameterValue (ParamIDs::q);
     pHpfFreq = apvts.getRawParameterValue (ParamIDs::hpfFreq);
     pHpfOn = apvts.getRawParameterValue (ParamIDs::hpfOn);
+    pLpfFreq = apvts.getRawParameterValue (ParamIDs::lpfFreq);
     pOs = apvts.getRawParameterValue (ParamIDs::oversampling);
     pMix = apvts.getRawParameterValue (ParamIDs::mix);
     pDelta = apvts.getRawParameterValue (ParamIDs::delta);
@@ -116,7 +126,9 @@ void UniqueVintageProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     p.mode = (int) std::lround (pMode->load());
     p.q = pQ->load();
     p.hpfHz = pHpfFreq->load();
-    p.hpfOn = pHpfOn->load() > 0.5f;
+    p.hpfOn = pHpfOn->load() > 0.5f;                   // FILTER switches both edges
+    p.lpfHz = pLpfFreq->load();
+    p.lpfOn = p.hpfOn && lpfEngaged (p.lpfHz);
     p.osIndex = (int) std::lround (pOs->load());
     p.mix = pMix->load() * 0.01f;
     p.delta = pDelta->load() > 0.5f;

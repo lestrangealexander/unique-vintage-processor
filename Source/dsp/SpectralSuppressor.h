@@ -17,8 +17,10 @@ public:
     {
         float amount = 0.0f;   // 0..11
         float q = 6.0f;        // 0.25 (broad) .. 40 (narrow)
-        float hpfHz = 4000.0f; // processing starts above this (when hpfOn)
+        float hpfHz = 4000.0f;  // processing starts above this (when hpfOn)
         bool hpfOn = true;
+        float lpfHz = 20000.0f; // ...and stops above this (when lpfOn)
+        bool lpfOn = false;
     };
 
     void prepare (double sampleRate, int numChannels);
@@ -52,7 +54,7 @@ private:
     void processFrame() noexcept;
     void computeGains (float amount) noexcept;
     void updateKernelTables (float q) noexcept;
-    void updateMask (float hpfHz, bool hpfOn) noexcept;
+    void updateMask (const Params& p) noexcept;
     void boxSmooth3 (const float* in, float* out, const int* halfWidths) noexcept;
 
     Params params;
@@ -70,8 +72,8 @@ private:
     std::vector<float> scratchSq, spread;
     std::vector<double> prefix;
 
-    float lastQ = -1.0f, lastHpf = -1.0f;
-    bool lastHpfOn = false;
+    float lastQ = -1.0f, lastHpf = -1.0f, lastLpf = -1.0f;
+    bool lastHpfOn = false, lastLpfOn = false;
     int kMin = 1;
     float attackCoef = 0.9f, releaseCoef = 0.1f, dispCoef = 0.3f, detCoef = 0.4f;
     float outScale = 1.0f / 3.0f, detScale = 1.0f;

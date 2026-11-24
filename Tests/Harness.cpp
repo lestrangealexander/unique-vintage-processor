@@ -6,6 +6,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "dsp/VintageEngine.h"
 #include "dsp/AutoGainTables.h"
+#include "dsp/AutoGainLpf.h"
 #include <chrono>
 #include <thread>
 #include <cstdio>
@@ -178,28 +179,60 @@ int cmdNull()
 
 int cmdSplit()
 {
-    LinearPhaseSplit sp;
-    sp.prepare (kFs, 1);
-    sp.setCutoff (4000.0f, true);
-    sp.prepare (kFs, 1);
-    const int lat = sp.getLatencySamples();
-    std::printf ("split latency %d\n", lat);
-    for (double f : { 500.0, 2000.0, 3000.0, 4000.0, 5000.0, 8000.0, 16000.0 })
+    struct Cfg { const char* name; float hp; bool hpOn; float lp; bool lpOn; };
+    const Cfg cfgs[] = { { "HPF 4k", 4000.0f, true, 20000.0f, false },
+                         { "HPF 4k + LPF 10k", 4000.0f, true, 10000.0f, true },
+                         { "LPF 2k only", 4000.0f, false, 2000.0f, true } };
+    for (const auto& cfg : cfgs)
     {
-        sp.reset();
-        const size_t n = (size_t) kFs;
+        LinearPhaseSplit sp;
+        sp.setBand (cfg.hp, cfg.hpOn, cfg.lp, cfg.lpOn);
+        sp.prepare (kFs, 1);
+        const int lat = sp.getLatencySamples();
+        std::printf ("%s (latency %d): rest / band\n", cfg.name, lat);
+        for (double f : { 500.0, 2000.0, 3000.0, 4000.0, 5000.0, 8000.0, 10000.0, 12000.0, 16000.0 })
+        {
+            sp.reset();
+            const size_t n = (size_t) kFs;
+            std::vector<float> x (n), lo (n), hi (n);
+            for (size_t i = 0; i < n; ++i) x[i] = (float) (0.5 * std::sin (kTwoPi * f * (double) i / kFs));
+            const float* in[1] = { x.data() };
+            float* l[1] = { lo.data() };
+            float* h[1] = { hi.data() };
+            sp.process (in, l, h, 1, (int) n);
+            const size_t st = (size_t) lat + 4000;
+            const double al = goertzelAmp (lo.data() + st, n - st, f, kFs) / 0.5, ah = goertzelAmp (hi.data() + st, n - st, f, kFs) / 0.5;
+            double recon = 0;
+            for (size_t i = st; i < n; ++i) recon = std::max (recon, (double) std::abs (lo[i] + hi[i] - x[i - (size_t) lat]));
+            std::printf ("  %6.0f Hz: rest %7.2f dB  band %7.2f dB  |rest+band - x| max %.2g\n", f, 20 * std::log10 (al + 1e-12),
+                         20 * std::log10 (ah + 1e-12), recon);
+        }
+    }
+    // switching the low-pass edge on and off while running must not click
+    {
+        LinearPhaseSplit sp;
+        sp.setBand (4000.0f, true, 20000.0f, false);
+        sp.prepare (kFs, 1);
+        const int lat = sp.getLatencySamples();
+        const size_t n = (size_t) kFs * 2;
         std::vector<float> x (n), lo (n), hi (n);
-        for (size_t i = 0; i < n; ++i) x[i] = (float) (0.5 * std::sin (kTwoPi * f * (double) i / kFs));
-        const float* in[1] = { x.data() };
-        float* l[1] = { lo.data() };
-        float* h[1] = { hi.data() };
-        sp.process (in, l, h, 1, (int) n);
-        const size_t st = (size_t) lat + 4000;
-        const double al = goertzelAmp (lo.data() + st, n - st, f, kFs) / 0.5, ah = goertzelAmp (hi.data() + st, n - st, f, kFs) / 0.5;
-        double recon = 0;
-        for (size_t i = st; i < n; ++i) recon = std::max (recon, (double) std::abs (lo[i] + hi[i] - x[i - (size_t) lat]));
-        std::printf ("  %6.0f Hz: low %6.2f dB  high %6.2f dB  |low+high - x| max %.2g\n", f, 20 * std::log10 (al + 1e-12),
-                     20 * std::log10 (ah + 1e-12), recon);
+        for (size_t i = 0; i < n; ++i) x[i] = (float) (0.3 * std::sin (kTwoPi * 9000.0 * (double) i / kFs) + 0.3 * std::sin (kTwoPi * 300.0 * (double) i / kFs));
+        double worst = 0.0;
+        for (size_t pos = 0; pos < n; pos += 480)
+        {
+            const bool on = ((pos / 9600) % 2) == 1;                   // toggles every 200 ms
+            sp.setBand (4000.0f, true, on ? 7000.0f + 50.0f * (float) ((pos / 480) % 40) : 20000.0f, on);
+            const float* in[1] = { x.data() + pos };
+            float* l[1] = { lo.data() + pos };
+            float* h[1] = { hi.data() + pos };
+            sp.process (in, l, h, 1, (int) std::min<size_t> (480, n - pos));
+        }
+        for (size_t i = (size_t) lat + 1; i < n; ++i)
+            worst = std::max (worst, (double) std::abs (lo[i] + hi[i] - x[i - (size_t) lat]));
+        double maxStep = 0.0;   // biggest sample-to-sample jump in the band output (a click would show here)
+        for (size_t i = (size_t) lat + 2; i < n; ++i) maxStep = std::max (maxStep, (double) std::abs (hi[i] - hi[i - 1]));
+        std::printf ("LPF toggling + sweeping: reconstruction max %.2g, band max step %.3f (9 kHz sine alone steps up to %.3f)\n",
+                     worst, maxStep, 0.3 * 2.0 * std::sin (kTwoPi * 9000.0 / kFs / 2.0) * 2.0);
     }
     return 0;
 }
@@ -525,6 +558,147 @@ int cmdAgCheck()
     return 0;
 }
 
+int cmdCalibrateLpf (const juce::String& headerPath)
+{
+    // Residual of the low-pass auto-gain model (see VintageEngine::vintageCompDb), measured on the
+    // same reference programme as the main tables: the extra dB each FILTER band needs.
+    using namespace agc;
+    const Sig ref = brightMix ((size_t) (kFs * 2.5), 3);
+    constexpr int NA = kLpfAmountSteps, NL = kLpfSteps;
+    static float vals[3][kInputSteps][kHpfSteps][NL][NA];
+    std::vector<std::thread> workers;
+    for (int mode = 0; mode < 3; ++mode)
+        workers.emplace_back ([mode, &ref]
+        {
+            for (int ii = 0; ii < kInputSteps; ++ii)
+                for (int h = 0; h < kHpfSteps; ++h)
+                    for (int l = 0; l < NL; ++l)
+                        for (int a = 0; a < NA; ++a)
+                        {
+                            float resid = 0.0f;
+                            const float hp = h > 0 ? kHpfHz[h - 1] : 20.0f;
+                            if (kLpfAmounts[a] > 0.0f && kLpfHz[l] > hp * 1.01f)
+                            {
+                                EngineParams p;
+                                p.amount = kLpfAmounts[a];
+                                p.mode = mode;
+                                p.inputDb = -18.0f + 6.0f * (float) ii;
+                                p.hpfOn = h > 0;
+                                p.hpfHz = h > 0 ? kHpfHz[h - 1] : 4000.0f;
+                                p.lpfOn = true;
+                                p.lpfHz = kLpfHz[l];
+                                p.autoGain = true;
+                                p.osIndex = 1;
+                                VintageEngine::useLpfResidual = false;
+                                int lat = 0;
+                                const Sig o = runEngine (ref, p, 512, &lat);
+                                Sig al (ref.size());
+                                for (size_t i = 0; i + (size_t) lat < o.size(); ++i) { al.l[i] = o.l[i + (size_t) lat]; al.r[i] = o.r[i + (size_t) lat]; }
+                                resid = juce::jlimit (-12.0f, 12.0f, (float) (kLoudness (ref, (size_t) kFs / 2) - kLoudness (al, (size_t) kFs / 2)));
+                            }
+                            vals[mode][ii][h][l][a] = resid;
+                        }
+            std::printf ("mode %d done\n", mode);
+            std::fflush (stdout);
+        });
+    for (auto& w : workers) w.join();
+
+    std::string out = "// Unique Vintage Processor — auto gain with the FILTER low-pass in (generated by UVPHarness calibratelpf)\n"
+                      "// Extra compensation (dB) on top of the power-additive model, per mode / input / high-pass knot /\n"
+                      "// low-pass knot / amount knot. Zero where the band is empty.\n#pragma once\n#include \"AutoGainTables.h\"\n"
+                      "#include \"AutoGainLpf.h\"\n\nnamespace uvp::agc\n{\n"
+                      "inline const float (&lpfResidualTable())[3][kInputSteps][kHpfSteps][kLpfSteps][kLpfAmountSteps]\n{\n"
+                      "    static const float t[3][kInputSteps][kHpfSteps][kLpfSteps][kLpfAmountSteps] = {\n";
+    for (int mode = 0; mode < 3; ++mode)
+    {
+        out += "    {\n";
+        for (int ii = 0; ii < kInputSteps; ++ii)
+        {
+            out += "     {\n";
+            for (int h = 0; h < kHpfSteps; ++h)
+            {
+                out += "      {";
+                for (int l = 0; l < NL; ++l)
+                {
+                    out += " {";
+                    for (int a = 0; a < NA; ++a)
+                        out += juce::String (vals[mode][ii][h][l][a], 2).toStdString() + "f" + (a + 1 < NA ? "," : "");
+                    out += l + 1 < NL ? "}," : "}";
+                }
+                out += h + 1 < kHpfSteps ? " },\n" : " }\n";
+            }
+            out += ii + 1 < kInputSteps ? "     },\n" : "     }\n";
+        }
+        out += mode < 2 ? "    },\n" : "    }\n";
+    }
+    out += "    };\n    return t;\n}\n} // namespace uvp::agc\n";
+    juce::File (headerPath).replaceWithText (out);
+    std::printf ("wrote %s\n", headerPath.toRawUTF8());
+    return 0;
+}
+
+int cmdAgLpfExtreme()
+{
+    const Sig ref = brightMix ((size_t) (kFs * 3), 11);
+    std::printf ("AG with low-pass, extreme corners (out - in, dB)\n");
+    double worst = 0.0;
+    for (int mode : { 0, 2 })
+        for (float in : { 12.0f, 18.0f })
+            for (float hp : { 20.0f, 4000.0f })
+            {
+                std::printf ("  mode %d in %+3.0f hp %5.0f:", mode, in, hp);
+                for (float lp : { 14000.0f, 16000.0f, 17000.0f, 18000.0f, 19000.0f, 19800.0f, 20000.0f })
+                {
+                    EngineParams p;
+                    p.amount = 11.0f; p.mode = mode; p.inputDb = in; p.autoGain = true; p.osIndex = 2;
+                    p.hpfHz = hp; p.hpfOn = true; p.lpfHz = lp; p.lpfOn = lp < 19990.0f;
+                    int lat = 0;
+                    const Sig o = runEngine (ref, p, 512, &lat);
+                    Sig al (ref.size());
+                    for (size_t i = 0; i + (size_t) lat < o.size(); ++i) { al.l[i] = o.l[i + (size_t) lat]; al.r[i] = o.r[i + (size_t) lat]; }
+                    const double d = kLoudness (al, (size_t) kFs / 2) - kLoudness (ref, (size_t) kFs / 2);
+                    worst = std::max (worst, std::abs (d));
+                    std::printf ("  %4.1fk %+5.2f", lp / 1000.0f, d);
+                }
+                std::printf ("\n");
+            }
+    std::printf ("worst |error| %.2f dB\n", worst);
+    return 0;
+}
+
+int cmdAgLpf()
+{
+    // AG with the FILTER low-pass edge in: the tables only know the high-pass edge, the rest is modelled
+    const Sig ref = brightMix ((size_t) (kFs * 3), 11);
+    struct Band { float hp, lp; };
+    const Band bands[] = { { 4000.0f, 20000.0f }, { 4000.0f, 16000.0f }, { 4000.0f, 12000.0f }, { 4000.0f, 8000.0f },
+                           { 2000.0f, 6000.0f }, { 1000.0f, 4000.0f }, { 400.0f, 3000.0f } };
+    double worst = 0.0;
+    std::printf ("AG with low-pass (K-weighted loudness out - in, dB; AG on)\n");
+    for (int mode = 0; mode < 3; ++mode)
+        for (float in : { -6.0f, 6.0f })
+            for (const auto& b : bands)
+            {
+                std::printf ("  mode %d in %+4.0f  %5.0f-%5.0f Hz:", mode, in, b.hp, b.lp);
+                for (float a : { 4.0f, 8.0f, 11.0f })
+                {
+                    EngineParams p;
+                    p.amount = a; p.mode = mode; p.inputDb = in; p.autoGain = true; p.osIndex = 2;
+                    p.hpfHz = b.hp; p.hpfOn = true; p.lpfHz = b.lp; p.lpfOn = b.lp < 19990.0f;
+                    int lat = 0;
+                    const Sig o = runEngine (ref, p, 512, &lat);
+                    Sig al (ref.size());
+                    for (size_t i = 0; i + (size_t) lat < o.size(); ++i) { al.l[i] = o.l[i + (size_t) lat]; al.r[i] = o.r[i + (size_t) lat]; }
+                    const double d = kLoudness (al, (size_t) kFs / 2) - kLoudness (ref, (size_t) kFs / 2);
+                    worst = std::max (worst, std::abs (d));
+                    std::printf ("  a%-4.1f %+5.2f", a, d);
+                }
+                std::printf ("\n");
+            }
+    std::printf ("worst |error| %.2f dB\n", worst);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Aliasing: a pure tone exactly on an FFT bin, steady state, 7-term Blackman-Harris window.
 // Everything that is not the tone, one of its harmonics below Nyquist, or DC is counted as
@@ -744,6 +918,22 @@ int cmdCpu()
             }
             std::printf ("\n");
         }
+    // the FILTER low-pass edge adds a second convolution; measure it on its own at 4x
+    for (int lpOn = 0; lpOn < 2; ++lpOn)
+    {
+        double best = 1.0e9;
+        for (int rep = 0; rep < 3; ++rep)
+        {
+            EngineParams p;
+            p.amount = 6.0f; p.mode = 0; p.osIndex = 2; p.hpfHz = 4000.0f; p.lpfHz = 12000.0f; p.lpfOn = lpOn == 1;
+            VintageEngine e;
+            const auto t0 = std::chrono::high_resolution_clock::now();
+            runEngine (in, p, 512, nullptr, &e);
+            const auto t1 = std::chrono::high_resolution_clock::now();
+            best = std::min (best, std::chrono::duration<double> (t1 - t0).count());
+        }
+        std::printf ("  even 4x, low-pass %s: %5.2f%%\n", lpOn ? "at 12 kHz" : "off      ", 100.0 * best / 6.0);
+    }
     return 0;
 }
 
@@ -783,7 +973,7 @@ int cmdCalibHarm (const juce::String& headerPath)
     // high band (above 4 kHz) of the reference programme
     const Sig ref = brightMix ((size_t) (kFs * 3), 9);
     LinearPhaseSplit sp;
-    sp.setCutoff (4000.0f, true);
+    sp.setBand (4000.0f, true, 20000.0f, false);
     sp.prepare (kFs, 2);
     Sig lo (ref.size()), hi (ref.size());
     {
@@ -945,6 +1135,9 @@ int main (int argc, char** argv)
     if (cmd == "aliasone") return cmdAliasOne (argc, argv);
     if (cmd == "jaalias") return cmdJaAlias();
     if (cmd == "agcheck") return cmdAgCheck();
+    if (cmd == "aglpf") return cmdAgLpf();
+    if (cmd == "aglpfx") return cmdAgLpfExtreme();
+    if (cmd == "calibratelpf") return cmdCalibrateLpf (argc > 2 ? argv[2] : "AutoGainLpfTables.h");
     if (cmd == "display") return cmdDisplay();
     if (cmd == "calibtape") return cmdCalibTape();
     if (cmd == "calibtape2") return cmdCalibTape2();

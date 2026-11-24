@@ -1,8 +1,8 @@
 // Unique Vintage Processor — complete signal chain
 //
-//  in -> INPUT -> suppressor (STFT, linked) -> LR4 linear-phase split at HPF
-//        high band -> harmonic stage (oversampled, RIAA emphasis)  ┐
-//        low band  -> latency align ──────────────────────────────┴-> sum
+//  in -> INPUT -> suppressor (STFT, linked, masked to the FILTER band) -> LR4 linear-phase band split
+//        band (HPF..LPF) -> harmonic stage (oversampled, RIAA emphasis)  ┐
+//        rest (outside)  -> latency align ──────────────────────────────┴-> sum
 //     -> AUTO GAIN -> MIX (vs. aligned dry) -> DELTA -> MORE COLOUR tape -> OUTPUT -> IN/OUT
 //
 // Latency is constant for every setting (all optional paths are padded).
@@ -25,7 +25,9 @@ struct EngineParams
     int mode = 0;            // 0 even, 1 odd, 2 hectic
     float q = 6.0f;
     float hpfHz = 4000.0f;
-    bool hpfOn = true;
+    bool hpfOn = true;       // FILTER: high-pass edge of the processed band
+    float lpfHz = 20000.0f;
+    bool lpfOn = false;      // FILTER: low-pass edge of the processed band
     int osIndex = 2;         // 0..4 -> 1x..16x
     float mix = 1.0f;        // 0..1
     bool delta = false;
@@ -63,11 +65,16 @@ public:
     }
 
     /** Static loudness compensation (dB) for the vintage section, from offline calibration. */
-    static float vintageCompDb (int mode, float amount, float hpfHz, bool hpfOn, float inputDb) noexcept;
+    static float vintageCompDb (int mode, float amount, float hpfHz, bool hpfOn, float lpfHz, bool lpfOn, float inputDb) noexcept;
+    /** Test hook: leave out the calibrated low-pass correction (used while calibrating it). */
+    static inline bool useLpfResidual = true;
     /** Static loudness compensation (dB) for the tape stage (model, drive). */
     static float tapeCompDb (int model, float driveDb) noexcept;
 
 private:
+    static float tableCompDb (int mode, float amount, float hpfHz, bool hpfOn, float inputDb) noexcept;
+    static float bandCompDb (int mode, float amount, float hpfHz, bool hpfOn, float edgeHz, float inputDb, float fullDb) noexcept;
+    static float lpfResidualDb (int mode, float amount, float hpfHz, bool hpfOn, float lpfHz, float inputDb) noexcept;
     void updateDisplay() noexcept;
     void mapBins (const float* binDb, int numBins, double binHz, float* outPoints, bool takeMax) noexcept;
 
@@ -80,8 +87,8 @@ private:
     TapeMachine tape;
     int vintageLatency = 0, totalLatency = 0;
 
-    juce::AudioBuffer<float> dryIn, lowBuf, highBuf;
-    std::array<IntDelay, 2> lowAlign, dryForMix, dryForBypass;
+    juce::AudioBuffer<float> dryIn, restBuf, bandBuf;
+    std::array<IntDelay, 2> restAlign, dryForMix, dryForBypass;
     LinearRamp inGain, outGain, mixRamp, compRamp, deltaRamp, bypassRamp, tapeMakeup;
 
     // output analyser

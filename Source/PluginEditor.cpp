@@ -2,7 +2,10 @@
 //
 // Everything is laid out on a fixed 1000 x 660 faceplate (+300 when the analyser is expanded),
 // in the same coordinates as the approved mockup, then scaled as a whole for the UI size option.
+// Dialogs (type-in values, saving a preset) open inside the plugin window, never as separate
+// windows, so a host's floating plugin window can't hide them.
 #include "PluginEditor.h"
+#include "ParamText.h"
 
 using namespace uvp::ui;
 
@@ -14,9 +17,18 @@ namespace
 
     juce::RangedAudioParameter& param (UniqueVintageProcessor& p, const char* id) { return *p.apvts.getParameter (id); }
 
-    void setDefaultOnDoubleClick (juce::Slider& s, juce::RangedAudioParameter& p)
+    /** Alt/Option-click returns a slider to its default (double-click is type-in). */
+    void setDefaultOnAltClick (juce::Slider& s, juce::RangedAudioParameter& p)
     {
         s.setDoubleClickReturnValue (true, (double) p.convertFrom0to1 (p.getDefaultValue()));
+    }
+
+    void setFromTyped (juce::RangedAudioParameter& p, float value)
+    {
+        value = p.getNormalisableRange().snapToLegalValue (value);
+        p.beginChangeGesture();
+        p.setValueNotifyingHost (p.convertTo0to1 (value));
+        p.endChangeGesture();
     }
 } // namespace
 
@@ -60,10 +72,126 @@ private:
 };
 
 //==============================================================================
+/** SAVE: a card over the faceplate with the preset name. Enter saves, Esc cancels. */
+class SavePresetPanel final : public juce::Component
+{
+public:
+    /** Writes the preset; returns false if it could not be saved. */
+    std::function<bool (const juce::String&)> onSave;
+
+    SavePresetPanel()
+    {
+        field.setFont (font (Weight::Medium, 17.0f, 0.2f));
+        field.setJustification (juce::Justification::centredLeft);
+        field.setIndents (14, 0);
+        field.setBorder ({});
+        field.setSelectAllWhenFocused (true);
+        field.setScrollbarsShown (false);
+        field.setInputRestrictions (60);
+        field.setColour (juce::TextEditor::backgroundColourId, col::white.interpolatedWith (col::yellow, 0.55f).withAlpha (0.995f));
+        field.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
+        field.setColour (juce::TextEditor::focusedOutlineColourId, col::yellowLn);
+        field.setColour (juce::TextEditor::textColourId, col::ink);
+        field.setColour (juce::TextEditor::highlightColourId, col::yellowLn.withAlpha (0.7f));
+        field.setColour (juce::TextEditor::highlightedTextColourId, col::ink);
+        field.onReturnKey = [this] { save(); };
+        field.onEscapeKey = [this] { close(); };
+        field.onTextChange = [this] { message.clear(); refreshName(); };
+        addAndMakeVisible (field);
+
+        cancelButton.setOffColour (col::yellow);
+        cancelButton.onClick = [this] { close(); };
+        saveButton.setToggleState (true, juce::dontSendNotification); // drawn charcoal
+        saveButton.onClick = [this] { save(); };
+        addAndMakeVisible (cancelButton);
+        addAndMakeVisible (saveButton);
+        setVisible (false);
+    }
+
+    void open (const juce::String& suggestedName)
+    {
+        message.clear();
+        field.setText (suggestedName, false);
+        refreshName();
+        setVisible (true);
+        toFront (false);
+        field.grabKeyboardFocus();
+        field.selectAll();
+    }
+
+    void close() { setVisible (false); }
+
+    static juce::Rectangle<float> card() { return { 310.0f, 238.0f, 380.0f, 184.0f }; }
+
+    void resized() override
+    {
+        const auto c = card().toNearestInt();
+        field.setBounds (c.getX() + 30, c.getY() + 56, c.getWidth() - 60, 42);
+        cancelButton.setBounds (c.getX() + 30, c.getY() + 136, 152, 30);
+        saveButton.setBounds (c.getRight() - 30 - 152, c.getY() + 136, 152, 30);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        g.fillAll (col::ink.withAlpha (0.16f));
+        const auto c = card();
+        g.setColour (col::ink.withAlpha (0.07f));
+        g.fillRoundedRectangle (c.translated (0.0f, 4.0f).expanded (2.0f), 18.0f);
+        g.setColour (col::white);
+        g.fillRoundedRectangle (c, 16.0f);
+        drawText (g, "SAVE PRESET", c.getCentreX(), c.getY() + 36.0f, font (Weight::Bold, 15.0f, 3.2f), col::ink);
+        const bool problem = message.isNotEmpty();
+        const auto note = problem ? message
+                                  : (replaces ? juce::String ("A preset with this name will be replaced.")
+                                              : juce::String ("Saved to your presets folder."));
+        drawText (g, note, c.getCentreX(), c.getY() + 120.0f, font (Weight::Medium, 11.5f, 0.3f),
+                  problem ? juce::Colour (0xFFC2553D) : col::ink.withAlpha (0.55f));
+    }
+
+    // a click outside the card keeps the dialog (and the typing) where it is
+    void mouseDown (const juce::MouseEvent&) override { field.grabKeyboardFocus(); }
+
+private:
+    void refreshName()
+    {
+        const auto name = field.getText().trim();
+        replaces = name.isNotEmpty() && PresetManager::fileFor (name).existsAsFile();
+        saveButton.setLabel (replaces ? "REPLACE" : "SAVE");
+        repaint();
+    }
+
+    void save()
+    {
+        const auto name = field.getText().trim();
+        if (juce::File::createLegalFileName (name).isEmpty())
+        {
+            message = "Type a name for the preset.";
+            repaint();
+            field.grabKeyboardFocus();
+            return;
+        }
+        if (onSave != nullptr && onSave (name))
+        {
+            close();
+            return;
+        }
+        message = "Couldn't write to the presets folder.";
+        repaint();
+    }
+
+    juce::TextEditor field;
+    PillButton cancelButton { "CANCEL", 12.0f, 1.6f, Weight::Bold }, saveButton { "SAVE", 12.0f, 1.6f, Weight::Bold };
+    juce::String message;
+    bool replaces = false;
+};
+
+//==============================================================================
 class UVPEditor::Faceplate final : public juce::Component
 {
 public:
-    Faceplate (UniqueVintageProcessor& p, UVPEditor& e) : proc (p), editor (e)
+    Faceplate (UniqueVintageProcessor& p, UVPEditor& e)
+        : proc (p), editor (e),
+          filter (param (p, ParamIDs::hpfFreq), param (p, ParamIDs::lpfFreq), UniqueVintageProcessor::kLpfTopHz)
     {
         logo = pegasus (col::white);
 
@@ -112,7 +240,7 @@ public:
         agAtt = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (proc.apvts, ParamIDs::autoGain, ag);
 
         // ---- harmonics modes (one choice parameter) and MORE COLOUR
-        OasisButton* modes[] = { &even, &odd, &hectic };
+        ModeButton* modes[] = { &even, &odd, &hectic };
         for (int i = 0; i < 3; ++i)
         {
             addAndMakeVisible (modes[i]);
@@ -153,35 +281,44 @@ public:
         addAndMakeVisible (vu);
         vu.setBounds (760 - 126, 340 - 126, 252, 252);
 
-        // ---- Q and HPF sliders (the HPF shares the analyser's frequency axis)
-        for (auto* s : { &q, &hpf })
-        {
-            s->setSliderStyle (juce::Slider::LinearHorizontal);
-            s->setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
-            s->setSliderSnapsToMousePosition (false);
-            s->setScrollWheelEnabled (true);
-            addAndMakeVisible (s);
-        }
+        // ---- Q slider
+        q.setSliderStyle (juce::Slider::LinearHorizontal);
+        q.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+        q.setSliderSnapsToMousePosition (false);
+        q.setScrollWheelEnabled (true);
         q.getProperties().set ("fill", true);
         q.getProperties().set ("valueOnHover", true);
         q.getProperties().set ("decimals", 1);
-        hpf.getProperties().set ("fill", false);
+        addAndMakeVisible (q);
         q.setBounds (66 - 11, 589 - 33, (400 - 66) + 22, 44);
-        const float hx0 = Analyser::freqToX (20.0f), hx1 = Analyser::freqToX (15000.0f);
-        hpf.setBounds (juce::roundToInt (hx0 - 11.0f), 632 - 33, juce::roundToInt (hx1 - hx0 + 22.0f), 44);
         qAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, ParamIDs::q, q);
-        hpfAtt = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (proc.apvts, ParamIDs::hpfFreq, hpf);
-        setDefaultOnDoubleClick (q, param (proc, ParamIDs::q));
-        setDefaultOnDoubleClick (hpf, param (proc, ParamIDs::hpfFreq));
+        setDefaultOnAltClick (q, param (proc, ParamIDs::q));
+        q.onDoubleClick = [this]
+        {
+            const float x = (float) q.getX() + (float) q.getPositionOfValue (q.getValue());
+            openEntry (param (proc, ParamIDs::q), { x, 589.0f - 22.0f }, 76, false);
+        };
 
-        addAndMakeVisible (hpfPill);
-        hpfPill.setBounds (14, 620, 46, 24);
-        hpfPill.onClick = [this] { hpfOnAtt->setValueAsCompleteGesture (hpfPill.getToggleState() ? 0.0f : 1.0f); };
-        hpfOnAtt = std::make_unique<juce::ParameterAttachment> (param (proc, ParamIDs::hpfOn), [this] (float v)
+        // ---- FILTER: high-pass and low-pass edges on the analyser's frequency axis
+        addAndMakeVisible (filter);
+        filter.setBounds (0, 632 - juce::roundToInt (FilterRange::kTrackY), kWidth, 46);
+        filter.onDoubleClick = [this] (int handle, juce::Point<float> at)
+        {
+            auto& p = filter.paramFor (handle);
+            openEntry (p, at.translated ((float) filter.getX(), (float) filter.getY() - 22.0f), 92, true,
+                       handle == 1 ? std::optional<float> (UniqueVintageProcessor::kLpfTopHz) : std::nullopt,
+                       [this, handle] (float hz) { return filter.clampFor (handle, hz); });
+        };
+
+        addAndMakeVisible (filterPill);
+        const int pillW = juce::roundToInt (textWidth (font (Weight::Bold, 10.0f, 0.9f), "FILTER") + 15.0f);
+        filterPill.setBounds (57 - pillW, 620, pillW, 24);
+        filterPill.onClick = [this] { filterOnAtt->setValueAsCompleteGesture (filterPill.getToggleState() ? 0.0f : 1.0f); };
+        filterOnAtt = std::make_unique<juce::ParameterAttachment> (param (proc, ParamIDs::hpfOn), [this] (float v)
         {
             const bool on = v > 0.5f;
-            hpfPill.setToggleState (on, juce::dontSendNotification);
-            hpf.setAlpha (on ? 1.0f : 0.45f);
+            filterPill.setToggleState (on, juce::dontSendNotification);
+            filter.setAlpha (on ? 1.0f : 0.45f);
         });
 
         // ---- analyser toggle
@@ -191,9 +328,18 @@ public:
         addChildComponent (analyser);
         analyser.setBounds (0, kMainHeight, kWidth, kAnalyserHeight);
 
-        for (auto* a : { modeAtt.get(), mcAtt.get(), tapeAtt.get(), osAtt.get(), hpfOnAtt.get() })
+        // ---- in-window dialogs, on top of everything
+        addChildComponent (entry);
+        addChildComponent (savePanel);
+        savePanel.setBounds (0, 0, kWidth, kMainHeight + kAnalyserHeight);
+        savePanel.onSave = [this] (const juce::String& name) { return editor.savePreset (name); };
+        addMouseListener (&clickAway, true); // a click anywhere else applies an open type-in box
+
+        for (auto* a : { modeAtt.get(), mcAtt.get(), tapeAtt.get(), osAtt.get(), filterOnAtt.get() })
             a->sendInitialUpdate();
     }
+
+    ~Faceplate() override { removeMouseListener (&clickAway); }
 
     void paint (juce::Graphics& g) override
     {
@@ -212,8 +358,7 @@ public:
         if (logo != nullptr)
             logo->drawWithin (g, { 24.0f, 58.0f, 66.0f * 1218.0f / 1249.0f, 66.0f }, juce::RectanglePlacement::centred, 1.0f);
         drawText (g, "UNIQUE VINTAGE PROCESSOR", 104.0f, 89.0f, font (Weight::Bold, 27.0f, 2.6f), col::white, Anchor::Start);
-        drawText (g, juce::String::fromUTF8 ("Sound Aquarium Audio by Alex L\xe2\x80\x99" "Estrange"), 105.0f, 114.0f,
-              font (Weight::Medium, 15.5f, 0.3f), col::white, Anchor::Start);
+        drawText (g, "Sound Aquarium Recording", 105.0f, 114.0f, font (Weight::Medium, 15.5f, 0.3f), col::white, Anchor::Start);
 
         const auto p0 = polar (420.0f, 352.0f, 154.0f, -135.0f), p1 = polar (420.0f, 352.0f, 154.0f, 135.0f);
         drawText (g, "0", p0.x - 4.0f, p0.y + 8.0f, font (Weight::SemiBold, 17.0f), col::ink);
@@ -226,20 +371,41 @@ public:
         drawText (g, "NARROW", 400.0f, 613.0f, small, col::ink.withAlpha (0.6f), Anchor::End);
         const auto tiny = font (Weight::SemiBold, 9.5f);
         drawText (g, "20", Analyser::freqToX (20.0f), 655.0f, tiny, col::ink.withAlpha (0.5f));
-        drawText (g, "15K", Analyser::freqToX (15000.0f), 655.0f, tiny, col::ink.withAlpha (0.5f));
+        drawText (g, "20K", Analyser::freqToX (20000.0f), 655.0f, tiny, col::ink.withAlpha (0.5f));
     }
 
     void attach (ParamKnob& k, const char* id)
     {
         sliderAtts.add (new juce::AudioProcessorValueTreeState::SliderAttachment (proc.apvts, id, k.slider));
-        setDefaultOnDoubleClick (k.slider, param (proc, id));
+        auto& p = param (proc, id);
+        setDefaultOnAltClick (k.slider, p);
+        k.slider.onDoubleClick = [this, &k, &p]
+        {
+            const bool big = k.getKnobRadius() > 60.0f;
+            openEntry (p, k.getKnobCentre(), big ? 100 : 80, false);
+        };
+    }
+
+    /** Type-in box centred on `at` (faceplate coordinates); the typed value is clamped to the parameter. */
+    void openEntry (juce::RangedAudioParameter& p, juce::Point<float> at, int width, bool isFrequency,
+                    std::optional<float> offValue = std::nullopt, std::function<float (float)> constrain = {})
+    {
+        constexpr int h = 30;
+        auto area = juce::Rectangle<int> (width, h).withCentre (at.roundToInt());
+        area = area.constrainedWithin ({ 4, 4, kWidth - 8, kMainHeight - 8 });
+        entry.open (area, p.getCurrentValueAsText(), [&p, isFrequency, offValue, constrain] (const juce::String& text)
+        {
+            if (auto v = uvp::parseTypedValue (text, isFrequency, offValue))
+                setFromTyped (p, constrain != nullptr ? constrain (*v) : *v);
+        });
     }
 
     UniqueVintageProcessor& proc;
     UVPEditor& editor;
     std::unique_ptr<juce::Drawable> logo;
 
-    PillButton bypass { "BYPASS" }, delta { "DELTA" }, osPill { "4X", 13.0f, 0.6f, Weight::Bold }, hpfPill { "HPF", 11.0f, 1.2f, Weight::Bold };
+    PillButton bypass { "BYPASS" }, delta { "DELTA" }, osPill { "4X", 13.0f, 0.6f, Weight::Bold },
+               filterPill { "FILTER", 10.0f, 0.9f, Weight::Bold };
     ZoneButton menuZone { "MENU", true, true }, saveZone { "SAVE", false, false };
     ParamKnob input { "INPUT", 21.0f, 4.0f, true, 53.0f, 11.0f, 1.8f };
     ParamKnob output { "OUTPUT", 21.0f, 4.0f, true, 53.0f, 11.0f, 1.8f };
@@ -247,17 +413,31 @@ public:
     ParamKnob drive { "DRIVE", 13.0f, 3.0f, true, 34.0f, 9.5f, 1.4f };
     ParamKnob amount { "AMOUNT", 116.0f, 10.0f, false, 176.0f, 15.0f, 3.2f, Weight::Bold, true };
     RoundButton ag { "AG" };
-    OasisButton even { "EVEN" }, odd { "ODD" }, hectic { "HECTIC" }, mc { "MC" };
+    ModeButton even { "EVEN" }, odd { "ODD" }, hectic { "HECTIC" }, mc { "MC" };
     MoreColourPanel mcPanel;
     VuMeter vu;
-    juce::Slider q, hpf;
+    ValueSlider q;
+    FilterRange filter;
     ExpandButton expand;
     Analyser analyser;
+    ValueEntry entry;
+    SavePresetPanel savePanel;
+
+    struct ClickAway final : juce::MouseListener
+    {
+        explicit ClickAway (ValueEntry& e) : entry (e) {}
+        void mouseDown (const juce::MouseEvent& e) override
+        {
+            if (entry.isVisible() && e.eventComponent != &entry && ! entry.isParentOf (e.eventComponent))
+                entry.dismiss (true);
+        }
+        ValueEntry& entry;
+    } clickAway { entry };
 
     juce::OwnedArray<juce::AudioProcessorValueTreeState::SliderAttachment> sliderAtts;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> qAtt, hpfAtt;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> qAtt;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAtt, deltaAtt, agAtt;
-    std::unique_ptr<juce::ParameterAttachment> modeAtt, mcAtt, tapeAtt, osAtt, hpfOnAtt;
+    std::unique_ptr<juce::ParameterAttachment> modeAtt, mcAtt, tapeAtt, osAtt, filterOnAtt;
 };
 
 //==============================================================================
@@ -274,8 +454,6 @@ UVPEditor::UVPEditor (UniqueVintageProcessor& p) : juce::AudioProcessorEditor (p
 UVPEditor::~UVPEditor()
 {
     stopTimer();
-    if (nameDialog != nullptr) nameDialog->exitModalState (0);
-    nameDialog.reset();
     face.reset();
     setLookAndFeel (nullptr);
 }
@@ -304,13 +482,18 @@ void UVPEditor::timerCallback()
     vuValue += (target - vuValue) * (1.0f - std::exp (-1.0f / (30.0f * 0.3f)));
     face->vu.setReduction (vuValue < 0.02f ? 0.0f : vuValue);
 
+    if (savedFlashTicks > 0 && --savedFlashTicks == 0)
+        face->saveZone.setButtonText ("SAVE");
+
     if (expanded)
     {
         const uvp::DisplayFrame* frame = nullptr;
         if (proc.getEngine().getDisplay().read (frame) && frame != nullptr)
             face->analyser.setFrame (*frame);
-        face->analyser.setHpf (proc.apvts.getRawParameterValue (ParamIDs::hpfFreq)->load(),
-                               proc.apvts.getRawParameterValue (ParamIDs::hpfOn)->load() > 0.5f);
+        const float lpHz = proc.apvts.getRawParameterValue (ParamIDs::lpfFreq)->load();
+        face->analyser.setBand (proc.apvts.getRawParameterValue (ParamIDs::hpfFreq)->load(), lpHz,
+                                UniqueVintageProcessor::lpfEngaged (lpHz),
+                                proc.apvts.getRawParameterValue (ParamIDs::hpfOn)->load() > 0.5f);
     }
 }
 
@@ -372,18 +555,17 @@ void UVPEditor::showPresetMenu()
 
 void UVPEditor::askPresetName()
 {
-    if (nameDialog != nullptr && nameDialog->isCurrentlyModal()) return;
-    nameDialog = std::make_unique<juce::AlertWindow> ("SAVE PRESET", "Name this preset.", juce::MessageBoxIconType::NoIcon, this);
-    nameDialog->setLookAndFeel (&lnf);
-    nameDialog->addTextEditor ("name", proc.presets.currentName == "default" ? juce::String() : proc.presets.currentName);
-    nameDialog->addButton ("SAVE", 1, juce::KeyPress (juce::KeyPress::returnKey));
-    nameDialog->addButton ("CANCEL", 0, juce::KeyPress (juce::KeyPress::escapeKey));
-    nameDialog->enterModalState (true, juce::ModalCallbackFunction::create ([this] (int result)
-    {
-        if (nameDialog == nullptr) return;
-        const auto name = nameDialog->getTextEditorContents ("name").trim();
-        nameDialog->setVisible (false);
-        if (result == 1 && name.isNotEmpty())
-            proc.presets.save (name);
-    }), false);
+    const auto current = proc.presets.currentName;
+    const bool isUserPreset = current.isNotEmpty() && current != "default"
+                              && PresetManager::fileFor (current).existsAsFile();
+    face->savePanel.open (isUserPreset ? current : PresetManager::suggestName());
+}
+
+bool UVPEditor::savePreset (const juce::String& name)
+{
+    if (! proc.presets.save (name))
+        return false;
+    face->saveZone.setButtonText ("SAVED");
+    savedFlashTicks = 45; // 1.5 s
+    return true;
 }

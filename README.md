@@ -1,6 +1,6 @@
 # Unique Vintage Processor
 
-**Sound Aquarium Audio by Alex L’Estrange.** This is a top-end processor modelled on what a vinyl cut does to high frequencies. It has three stages:
+**Sound Aquarium Recording.** This is a top-end processor modelled on what a vinyl cut does to high frequencies. It has three stages:
 
 1. A dynamic resonance suppressor that runs from broad lathe-limiter dips (BROAD) to surgical notches (NARROW).
 2. Analog harmonics: EVEN (valve), ODD (transformer) or HECTIC (valve, then transformer, then clipper).
@@ -39,20 +39,20 @@ To update, replace the `.vst3` folder and rescan. Presets are stored in `%APPDAT
 | Control | What it does |
 |---|---|
 | **AMOUNT** (0–11) | 0 is transparent. Up to 8 is heavy but musical: suppression, harmonics and RIAA emphasis all scale together. Above 8 it becomes an overt special effect. |
-| **EVEN / ODD / HECTIC** | Harmonic character: 12AX7 triode stage, transformer core hysteresis, or both followed by a diode clipper. |
+| **EVEN / ODD / HECTIC** | Harmonic character: 12AX7 triode stage, transformer core hysteresis, or both followed by a diode clipper. The active one is solid white. |
 | **MC** (MORE COLOUR) | Turns tape on and opens the machine list. Pressing MC again turns tape off and remembers the machine. **DRIVE** trims the level into the tape (±12 dB, compensated). |
 | **Q** | BROAD makes the whole band dip together, like a cutting-lathe HF limiter. NARROW makes surgical notches. The value shows while you adjust it. |
-| **HPF** | Only content above this frequency is processed (24 dB/oct linear-phase split, 20 Hz–15 kHz, default 4 kHz). Turn the HPF button off to process the full band. |
+| **FILTER** | Sets the band that gets processed; the signal outside it passes through dry. The left handle is the high-pass edge (20 Hz–15 kHz, default 4 kHz). The right handle is the low-pass edge: it starts at the very top, where it is off, and engages as soon as you slide it down. The white stretch between the handles is the processed band. Both edges are 24 dB/oct linear-phase splits, and the low-pass adds no extra latency. The FILTER button turns both edges off, so the full band is processed. |
 | **INPUT / OUTPUT** | ±18 dB. OUTPUT is a plain trim. |
 | **AG** | Auto gain: a calibrated loudness match with no level follower, so pumping can't happen. It is on by default. |
 | **MIX** | Blend between dry and processed signal. |
 | **DELTA** | Lets you hear only what the vintage section changes. |
 | **BYPASS** | Smooth in/out switch with matched latency. |
 | **OS** | Oversampling for the harmonics: 1X, 2X, 4X (default), 8X or 16X. Tape runs at up to 8X. EVEN is clean from 2X up; ODD and HECTIC at high AMOUNT with a bright source are cleanest at 8X or 16X. |
-| **MENU / SAVE** | User presets (Mac: `~/Library/Audio/Presets/Sound Aquarium/Unique Vintage Processor`; Windows: see above). MENU also has the interface size setting. |
+| **MENU / SAVE** | User presets. SAVE opens a name box inside the plugin window; press Enter or click SAVE. It shows SAVED when the file is written, and REPLACE if the name already exists. Presets are kept in `~/Library/Audio/Presets/Sound Aquarium/Unique Vintage Processor` on a Mac (Windows: see above). MENU also has the interface size setting. |
 | **EXPAND** | Shows the analyser: input (yellow), output (line) and suppression (salmon). |
 
-Double-click any knob or slider to reset it. The plugin has a constant latency of about 78 ms at 48 kHz, which your DAW compensates automatically.
+Double-click any knob or slider to type a value, then press Enter. Esc cancels. Units are optional: `4k` or `4` gives 4 kHz on the filter, and `off` turns the low-pass off. Option-click (Alt-click on Windows) resets a control to its default. The plugin has a constant latency of about 78 ms at 48 kHz, which your DAW compensates automatically.
 
 ## Building
 

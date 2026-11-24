@@ -118,6 +118,7 @@ void SpectralSuppressor::prepare (double sampleRate, int numChannels)
     wetRamp.reset (fs, 0.03, 0.0f);
     lastQ = -1.0f;
     lastHpf = -1.0f;
+    lastLpf = -1.0f;
     reset();
 }
 
@@ -161,23 +162,26 @@ void SpectralSuppressor::updateKernelTables (float q) noexcept
     lastQ = q;
 }
 
-void SpectralSuppressor::updateMask (float hpfHz, bool hpfOn) noexcept
+void SpectralSuppressor::updateMask (const Params& p) noexcept
 {
+    // the FILTER band, with exactly the band split's shape: LR4 low-pass at the top edge
+    // minus LR4 low-pass at the bottom edge (a disabled edge opens that side fully)
     for (int k = 0; k < K; ++k)
     {
         const double f = k * binHz;
-        double m = 1.0;
-        if (k < kMin)
-            m = 0.0;
-        else if (hpfOn)
+        double m = 0.0;
+        if (k >= kMin)
         {
-            const double r = std::pow (f / std::max (10.0, (double) hpfHz), 4.0);
-            m = r / (1.0 + r); // LR4 high-pass magnitude: matches the band split
+            const double below = p.hpfOn ? 1.0 / (1.0 + std::pow (f / std::max (10.0, (double) p.hpfHz), 4.0)) : 0.0;
+            const double upTo = p.lpfOn ? 1.0 / (1.0 + std::pow (f / std::max (10.0, (double) p.lpfHz), 4.0)) : 1.0;
+            m = std::max (0.0, upTo - below);
         }
         mask[(size_t) k] = (float) m;
     }
-    lastHpf = hpfHz;
-    lastHpfOn = hpfOn;
+    lastHpf = p.hpfHz;
+    lastHpfOn = p.hpfOn;
+    lastLpf = p.lpfHz;
+    lastLpfOn = p.lpfOn;
 }
 
 void SpectralSuppressor::boxSmooth3 (const float* in, float* out, const int* hw) noexcept
@@ -234,7 +238,8 @@ void SpectralSuppressor::processFrame() noexcept
 {
     const float amount = params.amount;
     if (std::abs (params.q - lastQ) > 0.002f * std::max (1.0f, params.q)) updateKernelTables (params.q);
-    if (params.hpfHz != lastHpf || params.hpfOn != lastHpfOn) updateMask (params.hpfHz, params.hpfOn);
+    if (params.hpfHz != lastHpf || params.hpfOn != lastHpfOn || params.lpfHz != lastLpf || params.lpfOn != lastLpfOn)
+        updateMask (params);
 
     // analysis ------------------------------------------------------------------
     for (int c = 0; c < numCh; ++c)
