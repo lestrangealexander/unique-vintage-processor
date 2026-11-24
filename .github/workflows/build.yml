@@ -111,15 +111,27 @@ jobs:
           Invoke-WebRequest -Uri https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip -OutFile pluginval.zip
           Expand-Archive pluginval.zip -DestinationPath pluginval
           $pv = (Get-ChildItem -Recurse pluginval -Filter pluginval.exe | Select-Object -First 1).FullName
-          & $pv --strictness-level 5 --skip-gui-tests --timeout-ms 900000 --validate "build/UniqueVintageProcessor_artefacts/Release/VST3/Unique Vintage Processor.vst3" *>&1 | Tee-Object -FilePath pluginval.log
+          & $pv --strictness-level 5 --timeout-ms 900000 --validate "build/UniqueVintageProcessor_artefacts/Release/VST3/Unique Vintage Processor.vst3" *>&1 | Tee-Object -FilePath pluginval.log
           exit $LASTEXITCODE
+
+      # Renders the editor with Windows' own graphics stack, to check fonts and layout.
+      # Built after packaging, so the shipped VST3 is untouched.
+      - name: Render the editor (snapshot)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cmake -B build -DUVP_BUILD_HARNESS=ON > snapshot-configure.log 2>&1
+          cmake --build build --config Release --target UVPSnapshot --parallel 4 2>&1 | tee snapshot-build.log | tail -5
+          exe=$(find build -name UVPSnapshot.exe | head -1)
+          "$exe" "$(cygpath -w "$PWD/snap")" 2>&1 | tee snapshot.log
 
       - name: Collect
         if: always()
         run: |
           mkdir -p out
           cp dist/UniqueVintageProcessor-win64.zip out/ 2>/dev/null || true
-          cp contents.log pluginval.log out/ 2>/dev/null || true
+          cp contents.log pluginval.log snapshot.log out/ 2>/dev/null || true
+          for f in snap/*.png; do [ -f "$f" ] && cp "$f" "out/win-$(basename "$f")"; done; true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -173,6 +185,8 @@ jobs:
           git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" builds
 
       - name: Release
+        # a commit message containing [no release] still builds and updates 'builds', but makes no release
+        if: ${{ !contains(github.event.head_commit.message, '[no release]') }}
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}

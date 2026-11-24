@@ -112,6 +112,9 @@ if(UVP_BUILD_HARNESS)
     target_compile_definitions(UVPSnapshot PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_MODAL_LOOPS_PERMITTED=1)
     target_link_libraries(UVPSnapshot PRIVATE UVPAssets
         juce::juce_audio_utils juce::juce_dsp juce::juce_recommended_config_flags)
+    if(MSVC)
+        target_compile_options(UVPSnapshot PRIVATE /utf-8 /bigobj)
+    endif()
 
     # developer tool: plugin-level robustness checks
     juce_add_console_app(UVPStress PRODUCT_NAME "UVPStress")
