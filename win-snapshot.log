@@ -1,0 +1,37 @@
+wrote D:\a\unique-vintage-processor\unique-vintage-processor\snap\editor_main.png (1000 x 660)
+type-in values:
+  ok    found AMOUNT
+  ok    double-click opens a type-in box
+  ok    box starts with the current value
+wrote D:\a\unique-vintage-processor\unique-vintage-processor\snap\editor_typein.png (1000 x 660)
+  ok    AMOUNT 7.5 + Enter -> 7.5
+  ok    box closes after Enter
+  ok    AMOUNT 42 is held at 11
+  ok    Esc cancels
+  ok    a real double-click on AMOUNT opens the box
+  ok    clicking elsewhere applies
+  ok    a real double-click on the low-pass handle opens its box
+  ok    found the FILTER slider
+  ok    low-pass starts off (at the top)
+  ok    low-pass '9k' -> 9 kHz
+  ok    high-pass '2.5' -> 2.5 kHz
+  ok    high-pass can't pass the low-pass (12k -> 9k)
+  ok    high-pass '250 Hz' -> 250 Hz
+  ok    low-pass 'off' -> off
+saving a preset:
+  presets folder: C:\Users\runneradmin\AppData\Roaming\Sound Aquarium\Unique Vintage Processor\Presets
+  ok    presets folder takes files
+  ok    top bar shows MENU and SAVE
+  ok    saving returns ok
+  ok    the .uvpreset file is written (extension added)
+  ok    SAVE shows SAVED
+  ok    top bar names the saved preset
+  ok    it is listed in MENU
+wrote D:\a\unique-vintage-processor\unique-vintage-processor\snap\editor_saved.png (1000 x 660)
+  ok    preset loads back
+  ok    subfolders are listed ("Snapshot Sub / Air")
+  ok    session recall keeps the preset name
+  ok    back to MENU with no preset
+wrote D:\a\unique-vintage-processor\unique-vintage-processor\snap\editor_expanded.png (1000 x 960)
+wrote D:\a\unique-vintage-processor\unique-vintage-processor\snap\editor_filter_off.png (1000 x 960)
+all checks passed
