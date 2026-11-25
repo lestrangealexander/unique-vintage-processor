@@ -146,6 +146,7 @@ void UniqueVintageProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     auto st = apvts.copyState();
     st.setProperty ("presetName", presets.currentName, nullptr);
+    st.setProperty ("presetFile", presets.currentFile.getFullPathName(), nullptr);
     st.setProperty ("uiScale", uiScale.load(), nullptr);
     if (auto xml = st.createXml()) copyXmlToBinary (*xml, destData);
 }
@@ -157,6 +158,8 @@ void UniqueVintageProcessor::setStateInformation (const void* data, int sizeInBy
         {
             auto tree = juce::ValueTree::fromXml (*xml);
             presets.currentName = tree.getProperty ("presetName", "default").toString();
+            const auto path = tree.getProperty ("presetFile", {}).toString();
+            presets.currentFile = juce::File::isAbsolutePath (path) ? juce::File (path) : juce::File();
             uiScale.store ((float) (double) tree.getProperty ("uiScale", 1.0));
             apvts.replaceState (tree);
         }

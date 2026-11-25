@@ -179,35 +179,52 @@ int main (int argc, char** argv)
     }
 
     std::printf ("saving a preset:\n");
-    const auto presetFile = PresetManager::fileFor ("Snapshot Test Preset");
-    presetFile.deleteFile();
-    if (auto* saveZone = findShowing<uvp::ui::ZoneButton> (*ed, [] (uvp::ui::ZoneButton& b) { return b.getButtonText() == "SAVE"; }))
+    std::printf ("  presets folder: %s\n", PresetManager::getFolder().getFullPathName().toRawUTF8());
+    check (PresetManager::canWriteTo (PresetManager::getFolder()), "presets folder takes files");
     {
-        saveZone->triggerClick();
+        auto* menuZone = findShowing<uvp::ui::ZoneButton> (*ed, [] (uvp::ui::ZoneButton& b) { return b.getButtonText() == "MENU"; });
+        auto* saveZone = findShowing<uvp::ui::ZoneButton> (*ed, [] (uvp::ui::ZoneButton& b) { return b.getButtonText() == "SAVE"; });
+        check (menuZone != nullptr && saveZone != nullptr, "top bar shows MENU and SAVE");
+        // what SAVE does once the system Save window returns a file (that window itself can't be scripted here)
+        const auto file = PresetManager::getFolder().getChildFile ("Snapshot Test Preset With A Long Name");
+        const auto written = file.withFileExtension (PresetManager::kExtension);
+        written.deleteFile();
+        set (ParamIDs::amount, 5.5f);
+        set (ParamIDs::mix, 0.4f);
+        check (ed->savePresetTo (file), "saving returns ok");
+        check (written.existsAsFile(), "the .uvpreset file is written (extension added)");
         pump (100);
-        auto* field = findShowing<juce::TextEditor> (*ed, [] (juce::TextEditor& t) { return dynamic_cast<ValueEntry*> (&t) == nullptr; });
-        check (field != nullptr, "SAVE opens the name box inside the plugin window");
-        if (field != nullptr)
-        {
-            check (field->getText().startsWith ("Preset "), "suggests a name");
-            field->setText ("Snapshot Test Preset", false);
-            shoot ("editor_save.png", 4);
-            set (ParamIDs::amount, 5.5f);
-            pressReturn (*field);
-            pump (100);
-            check (presetFile.existsAsFile(), "Enter writes the preset file");
-            check (! field->isShowing(), "dialog closes");
-            check (saveZone->getButtonText() == "SAVED", "SAVE shows SAVED");
-            set (ParamIDs::amount, 1.0f);
-            check (proc.presets.load (presetFile) && std::abs (get (ParamIDs::amount) - 5.5f) < 0.001f, "preset loads back");
-        }
+        if (saveZone != nullptr) check (saveZone->getButtonText() == "SAVED", "SAVE shows SAVED");
+        if (menuZone != nullptr) check (menuZone->getButtonText() == "SNAPSHOT TEST PRESET WITH A LONG NAME", "top bar names the saved preset");
+        check (proc.presets.list().contains (written), "it is listed in MENU");
+        shoot ("editor_saved.png", 4);
+        set (ParamIDs::amount, 1.0f);
+        set (ParamIDs::mix, 1.0f);
+        check (proc.presets.load (written) && std::abs (get (ParamIDs::amount) - 5.5f) < 0.001f
+                   && std::abs (get (ParamIDs::mix) - 0.4f) < 0.001f, "preset loads back");
+
+        // a preset in a subfolder shows up too
+        const auto sub = PresetManager::getFolder().getChildFile ("Snapshot Sub").getChildFile ("Air.uvpreset");
+        check (ed->savePresetTo (sub) && proc.presets.list().contains (sub)
+                   && PresetManager::displayName (sub) == "Snapshot Sub / Air", "subfolders are listed (\"Snapshot Sub / Air\")");
+        sub.getParentDirectory().deleteRecursively();
+
+        // the session remembers which preset was in use
+        juce::MemoryBlock blob;
+        proc.presets.load (written);
+        proc.getStateInformation (blob);
+        proc.presets.forgetCurrent();
+        proc.setStateInformation (blob.getData(), (int) blob.getSize());
+        check (proc.presets.currentFile == written, "session recall keeps the preset name");
+        written.deleteFile();
+        proc.presets.forgetCurrent();
+        pump (100);
+        if (menuZone != nullptr) check (menuZone->getButtonText() == "MENU", "back to MENU with no preset");
     }
-    else
-        check (false, "found SAVE");
-    presetFile.deleteFile();
 
     // the look with the low-pass in, ODD, MORE COLOUR and the analyser open
     set (ParamIDs::amount, 4.2f);
+    set (ParamIDs::mix, 1.0f);
     set (ParamIDs::lpfFreq, 12000.0f);
     set (ParamIDs::mode, 1.0f);
     set (ParamIDs::moreColour, 1.0f);

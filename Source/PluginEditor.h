@@ -26,14 +26,23 @@ private:
     void applySize();
     void showPresetMenu();
     void showOsMenu();
-    void askPresetName();
-    bool savePreset (const juce::String& name);
+    void chooseAndSavePreset();
+    void chooseAndLoadPreset();
+    void showProblem (const juce::String& title, const juce::String& message);
+    void refreshPresetLabel();
+
+public:
+    /** Saves the current settings as a preset file (what SAVE does once a file is chosen). */
+    bool savePresetTo (const juce::File& file);
+
+private:
 
     UniqueVintageProcessor& proc;
     uvp::ui::UVPLookAndFeel lnf;
     std::unique_ptr<Faceplate> face;
     bool expanded = false;
     int savedFlashTicks = 0;
+    std::unique_ptr<juce::FileChooser> fileChooser;
     float vuValue = 0.0f;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (UVPEditor)

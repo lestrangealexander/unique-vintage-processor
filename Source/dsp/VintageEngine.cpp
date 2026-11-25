@@ -167,8 +167,8 @@ void VintageEngine::prepare (double sampleRate, int maxBlockSize, int numChannel
     {
         restAlign[(size_t) c].prepare (harmonics.getLatencySamples() + 4);
         restAlign[(size_t) c].setDelay (harmonics.getLatencySamples());
-        dryForMix[(size_t) c].prepare (vintageLatency + 4);
-        dryForMix[(size_t) c].setDelay (vintageLatency);
+        dryForDelta[(size_t) c].prepare (vintageLatency + 4);
+        dryForDelta[(size_t) c].setDelay (vintageLatency);
         dryForBypass[(size_t) c].prepare (totalLatency + 4);
         dryForBypass[(size_t) c].setDelay (totalLatency);
     }
@@ -177,6 +177,7 @@ void VintageEngine::prepare (double sampleRate, int maxBlockSize, int numChannel
     mixRamp.reset (fs, 0.02, params.mix);
     compRamp.reset (fs, 0.05, 1.0f);
     deltaRamp.reset (fs, 0.02, params.delta ? 1.0f : 0.0f);
+    deltaMixRamp.reset (fs, 0.02, params.delta ? 1.0f : 0.0f);
     bypassRamp.reset (fs, 0.02, params.bypass ? 1.0f : 0.0f);
     tapeMakeup.reset (fs, 0.05, 1.0f);
 
@@ -207,7 +208,7 @@ void VintageEngine::reset()
     split.reset();
     harmonics.reset();
     tape.reset();
-    for (auto* arr : { &restAlign, &dryForMix, &dryForBypass })
+    for (auto* arr : { &restAlign, &dryForDelta, &dryForBypass })
         for (auto& d : *arr) d.reset();
     std::fill (outRing.begin(), outRing.end(), 0.0f);
     std::fill (outPow.begin(), outPow.end(), 0.0f);
@@ -246,6 +247,7 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
     outGain.setTarget (dbToGain (p.outputDb));
     mixRamp.setTarget (std::max (0.0f, std::min (1.0f, p.mix)));
     deltaRamp.setTarget (p.delta ? 1.0f : 0.0f);
+    deltaMixRamp.setTarget (p.delta ? 1.0f : 0.0f);
     bypassRamp.setTarget (p.bypass ? 1.0f : 0.0f);
     float comp = 1.0f;
     if (p.autoGain)
@@ -276,29 +278,29 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
     split.process (ch, rest, band, nCh, n);
     harmonics.process (band, nCh, n);
 
-    // ---- 5. sum, auto gain, mix, delta
+    // ---- 5. sum, auto gain, delta (DELTA: only what the vintage section changed; tape is off then)
     for (int i = 0; i < n; ++i)
     {
         const float cg = compRamp.next();
-        const float mx = mixRamp.next();
         const float dl = deltaRamp.next();
         for (int c = 0; c < nCh; ++c)
         {
             const float wet = (restAlign[(size_t) c].process (rest[c][i]) + band[c][i]) * cg;
-            const float dry = dryForMix[(size_t) c].process (dryIn.getSample (c, i));
-            const float mixed = dry + mx * (wet - dry);
-            ch[c][i] = mixed - dl * dry; // delta: only what the vintage section changed
+            ch[c][i] = wet - dl * dryForDelta[(size_t) c].process (dryIn.getSample (c, i));
         }
     }
 
     // ---- 6. MORE COLOUR tape (constant latency whether on or off)
     tape.process (ch, nCh, n);
 
-    // ---- 7. tape makeup, OUTPUT, IN/OUT
+    // ---- 7. tape makeup and OUTPUT (part of the wet signal), then MIX against the untouched input, IN/OUT.
+    // At MIX 0 % the output is the input, exactly, whatever INPUT / OUTPUT / AG / MORE COLOUR are doing.
     for (int i = 0; i < n; ++i)
     {
         const float tg = tapeMakeup.next();
         const float og = outGain.next();
+        const float mx = mixRamp.next();
+        const float dryShare = (1.0f - mx) * (1.0f - deltaMixRamp.next()); // DELTA plays the change alone
         const float bp = bypassRamp.next();
         float drySum = 0.0f;
         for (int c = 0; c < nCh; ++c)
@@ -306,8 +308,8 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
             const float processed = ch[c][i] * tg * og;
             const float dry = dryForBypass[(size_t) c].process (dryIn.getSample (c, i));
             drySum += dry;
-            const float y = processed + bp * (dry - processed);
-            ch[c][i] = y;
+            const float mixed = mx * processed + dryShare * dry;
+            ch[c][i] = mixed + bp * (dry - mixed);
         }
         // analysers: mono sum of what leaves the plugin, and of the input aligned to it
         float s = ch[0][i];

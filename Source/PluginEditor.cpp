@@ -2,8 +2,9 @@
 //
 // Everything is laid out on a fixed 1000 x 660 faceplate (+300 when the analyser is expanded),
 // in the same coordinates as the approved mockup, then scaled as a whole for the UI size option.
-// Dialogs (type-in values, saving a preset) open inside the plugin window, never as separate
-// windows, so a host's floating plugin window can't hide them.
+// Type-in values open inside the plugin window. Saving and loading preset files use the system's
+// own file windows: they sit above any floating plugin window and get the keyboard whatever the
+// DAW does with keystrokes in plugin windows.
 #include "PluginEditor.h"
 #include "ParamText.h"
 
@@ -72,120 +73,6 @@ private:
 };
 
 //==============================================================================
-/** SAVE: a card over the faceplate with the preset name. Enter saves, Esc cancels. */
-class SavePresetPanel final : public juce::Component
-{
-public:
-    /** Writes the preset; returns false if it could not be saved. */
-    std::function<bool (const juce::String&)> onSave;
-
-    SavePresetPanel()
-    {
-        field.setFont (font (Weight::Medium, 17.0f, 0.2f));
-        field.setJustification (juce::Justification::centredLeft);
-        field.setIndents (14, 0);
-        field.setBorder ({});
-        field.setSelectAllWhenFocused (true);
-        field.setScrollbarsShown (false);
-        field.setInputRestrictions (60);
-        field.setColour (juce::TextEditor::backgroundColourId, col::white.interpolatedWith (col::yellow, 0.55f).withAlpha (0.995f));
-        field.setColour (juce::TextEditor::outlineColourId, juce::Colours::transparentBlack);
-        field.setColour (juce::TextEditor::focusedOutlineColourId, col::yellowLn);
-        field.setColour (juce::TextEditor::textColourId, col::ink);
-        field.setColour (juce::TextEditor::highlightColourId, col::yellowLn.withAlpha (0.7f));
-        field.setColour (juce::TextEditor::highlightedTextColourId, col::ink);
-        field.onReturnKey = [this] { save(); };
-        field.onEscapeKey = [this] { close(); };
-        field.onTextChange = [this] { message.clear(); refreshName(); };
-        addAndMakeVisible (field);
-
-        cancelButton.setOffColour (col::yellow);
-        cancelButton.onClick = [this] { close(); };
-        saveButton.setToggleState (true, juce::dontSendNotification); // drawn charcoal
-        saveButton.onClick = [this] { save(); };
-        addAndMakeVisible (cancelButton);
-        addAndMakeVisible (saveButton);
-        setVisible (false);
-    }
-
-    void open (const juce::String& suggestedName)
-    {
-        message.clear();
-        field.setText (suggestedName, false);
-        refreshName();
-        setVisible (true);
-        toFront (false);
-        field.grabKeyboardFocus();
-        field.selectAll();
-    }
-
-    void close() { setVisible (false); }
-
-    static juce::Rectangle<float> card() { return { 310.0f, 238.0f, 380.0f, 184.0f }; }
-
-    void resized() override
-    {
-        const auto c = card().toNearestInt();
-        field.setBounds (c.getX() + 30, c.getY() + 56, c.getWidth() - 60, 42);
-        cancelButton.setBounds (c.getX() + 30, c.getY() + 136, 152, 30);
-        saveButton.setBounds (c.getRight() - 30 - 152, c.getY() + 136, 152, 30);
-    }
-
-    void paint (juce::Graphics& g) override
-    {
-        g.fillAll (col::ink.withAlpha (0.16f));
-        const auto c = card();
-        g.setColour (col::ink.withAlpha (0.07f));
-        g.fillRoundedRectangle (c.translated (0.0f, 4.0f).expanded (2.0f), 18.0f);
-        g.setColour (col::white);
-        g.fillRoundedRectangle (c, 16.0f);
-        drawText (g, "SAVE PRESET", c.getCentreX(), c.getY() + 36.0f, font (Weight::Bold, 15.0f, 3.2f), col::ink);
-        const bool problem = message.isNotEmpty();
-        const auto note = problem ? message
-                                  : (replaces ? juce::String ("A preset with this name will be replaced.")
-                                              : juce::String ("Saved to your presets folder."));
-        drawText (g, note, c.getCentreX(), c.getY() + 120.0f, font (Weight::Medium, 11.5f, 0.3f),
-                  problem ? juce::Colour (0xFFC2553D) : col::ink.withAlpha (0.55f));
-    }
-
-    // a click outside the card keeps the dialog (and the typing) where it is
-    void mouseDown (const juce::MouseEvent&) override { field.grabKeyboardFocus(); }
-
-private:
-    void refreshName()
-    {
-        const auto name = field.getText().trim();
-        replaces = name.isNotEmpty() && PresetManager::fileFor (name).existsAsFile();
-        saveButton.setLabel (replaces ? "REPLACE" : "SAVE");
-        repaint();
-    }
-
-    void save()
-    {
-        const auto name = field.getText().trim();
-        if (juce::File::createLegalFileName (name).isEmpty())
-        {
-            message = "Type a name for the preset.";
-            repaint();
-            field.grabKeyboardFocus();
-            return;
-        }
-        if (onSave != nullptr && onSave (name))
-        {
-            close();
-            return;
-        }
-        message = "Couldn't write to the presets folder.";
-        repaint();
-    }
-
-    juce::TextEditor field;
-    PillButton cancelButton { "CANCEL", 12.0f, 1.6f, Weight::Bold }, saveButton { "SAVE", 12.0f, 1.6f, Weight::Bold };
-    juce::String message;
-    bool replaces = false;
-};
-
-//==============================================================================
 class UVPEditor::Faceplate final : public juce::Component
 {
 public:
@@ -215,7 +102,7 @@ public:
         menuZone.setBounds (752, 9, 148, 24);
         saveZone.setBounds (900, 9, 82, 24);
         menuZone.onClick = [this] { editor.showPresetMenu(); };
-        saveZone.onClick = [this] { editor.askPresetName(); };
+        saveZone.onClick = [this] { editor.chooseAndSavePreset(); };
 
         // ---- INPUT / AG / OUTPUT / MIX
         for (auto* k : { &input, &output, &mix, &drive, &amount })
@@ -328,11 +215,8 @@ public:
         addChildComponent (analyser);
         analyser.setBounds (0, kMainHeight, kWidth, kAnalyserHeight);
 
-        // ---- in-window dialogs, on top of everything
+        // ---- type-in box, on top of everything
         addChildComponent (entry);
-        addChildComponent (savePanel);
-        savePanel.setBounds (0, 0, kWidth, kMainHeight + kAnalyserHeight);
-        savePanel.onSave = [this] (const juce::String& name) { return editor.savePreset (name); };
         addMouseListener (&clickAway, true); // a click anywhere else applies an open type-in box
 
         for (auto* a : { modeAtt.get(), mcAtt.get(), tapeAtt.get(), osAtt.get(), filterOnAtt.get() })
@@ -421,7 +305,6 @@ public:
     ExpandButton expand;
     Analyser analyser;
     ValueEntry entry;
-    SavePresetPanel savePanel;
 
     struct ClickAway final : juce::MouseListener
     {
@@ -454,6 +337,7 @@ UVPEditor::UVPEditor (UniqueVintageProcessor& p) : juce::AudioProcessorEditor (p
 UVPEditor::~UVPEditor()
 {
     stopTimer();
+    fileChooser.reset(); // closes an open Save / Load window without calling back
     face.reset();
     setLookAndFeel (nullptr);
 }
@@ -484,6 +368,7 @@ void UVPEditor::timerCallback()
 
     if (savedFlashTicks > 0 && --savedFlashTicks == 0)
         face->saveZone.setButtonText ("SAVE");
+    refreshPresetLabel();
 
     if (expanded)
     {
@@ -518,18 +403,19 @@ void UVPEditor::showOsMenu()
 void UVPEditor::showPresetMenu()
 {
     const auto files = proc.presets.list();
+    const auto current = proc.presets.currentFile;
     juce::PopupMenu m;
     m.addSectionHeader ("PRESETS");
     if (files.isEmpty())
         m.addItem (-1, "No presets saved yet", false, false);
     for (int i = 0; i < files.size(); ++i)
-        m.addItem (100 + i, files[i].getFileNameWithoutExtension(), true, files[i].getFileNameWithoutExtension() == proc.presets.currentName);
+        m.addItem (1000 + i, PresetManager::displayName (files[i]), true, files[i] == current);
     m.addSeparator();
     m.addItem (1, "Previous preset", ! files.isEmpty());
     m.addItem (2, "Next preset", ! files.isEmpty());
     m.addItem (3, "Save preset...");
-    const auto currentFile = PresetManager::getFolder().getChildFile (proc.presets.currentName + PresetManager::kExtension);
-    m.addItem (4, "Delete \"" + proc.presets.currentName + "\"", currentFile.existsAsFile());
+    m.addItem (7, "Load preset file...");
+    m.addItem (4, "Delete \"" + proc.presets.currentName + "\"", current.existsAsFile());
     m.addItem (5, "Reset to default");
     m.addItem (6, "Show presets folder");
     m.addSeparator();
@@ -540,32 +426,81 @@ void UVPEditor::showPresetMenu()
     m.addSubMenu ("Interface size", sizes);
 
     m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&face->menuZone),
-                     [this, files, currentFile] (int r)
+                     [this, files, current] (int r)
                      {
-                         if (r >= 200) { proc.uiScale.store (kUiScales[r - 200]); applySize(); }
-                         else if (r >= 100 && r - 100 < files.size()) proc.presets.load (files[r - 100]);
+                         if (r >= 1000 && r - 1000 < files.size()) proc.presets.load (files[r - 1000]);
+                         else if (r >= 200 && r < 200 + (int) std::size (kUiScales)) { proc.uiScale.store (kUiScales[r - 200]); applySize(); }
                          else if (r == 1) proc.presets.step (-1);
                          else if (r == 2) proc.presets.step (1);
-                         else if (r == 3) askPresetName();
-                         else if (r == 4) proc.presets.remove (currentFile);
+                         else if (r == 3) chooseAndSavePreset();
+                         else if (r == 4) proc.presets.remove (current);
                          else if (r == 5) proc.presets.resetToDefault();
                          else if (r == 6) PresetManager::getFolder().startAsProcess();
+                         else if (r == 7) chooseAndLoadPreset();
+                         refreshPresetLabel();
                      });
 }
 
-void UVPEditor::askPresetName()
+void UVPEditor::chooseAndSavePreset()
 {
-    const auto current = proc.presets.currentName;
-    const bool isUserPreset = current.isNotEmpty() && current != "default"
-                              && PresetManager::fileFor (current).existsAsFile();
-    face->savePanel.open (isUserPreset ? current : PresetManager::suggestName());
+    const auto current = proc.presets.currentFile;
+    const auto start = current.existsAsFile() ? current
+                                              : PresetManager::getFolder().getChildFile (PresetManager::suggestName() + PresetManager::kExtension);
+    fileChooser = std::make_unique<juce::FileChooser> ("Save preset", start, juce::String ("*") + PresetManager::kExtension);
+    fileChooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::warnAboutOverwriting,
+                              [safe = juce::Component::SafePointer<UVPEditor> (this)] (const juce::FileChooser& fc)
+                              {
+                                  const auto file = fc.getResult();
+                                  if (safe != nullptr && file != juce::File())
+                                      safe->savePresetTo (file);
+                              });
 }
 
-bool UVPEditor::savePreset (const juce::String& name)
+void UVPEditor::chooseAndLoadPreset()
 {
-    if (! proc.presets.save (name))
+    fileChooser = std::make_unique<juce::FileChooser> ("Load preset", PresetManager::getFolder(), juce::String ("*") + PresetManager::kExtension);
+    fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                              [safe = juce::Component::SafePointer<UVPEditor> (this)] (const juce::FileChooser& fc)
+                              {
+                                  const auto file = fc.getResult();
+                                  if (safe == nullptr || file == juce::File()) return;
+                                  if (! safe->proc.presets.load (file))
+                                      safe->showProblem ("Preset not loaded", file.getFileName() + " isn't a Unique Vintage Processor preset.");
+                                  safe->refreshPresetLabel();
+                              });
+}
+
+bool UVPEditor::savePresetTo (const juce::File& file)
+{
+    const auto result = proc.presets.saveTo (file);
+    if (result.failed())
+    {
+        showProblem ("Preset not saved", result.getErrorMessage());
         return false;
+    }
     face->saveZone.setButtonText ("SAVED");
     savedFlashTicks = 45; // 1.5 s
+    refreshPresetLabel();
     return true;
+}
+
+void UVPEditor::showProblem (const juce::String& title, const juce::String& message)
+{
+    juce::NativeMessageBox::showForOptionsAsync (juce::MessageBoxOptions()
+                                                     .withIconType (juce::MessageBoxIconType::WarningIcon)
+                                                     .withTitle (title)
+                                                     .withMessage (message)
+                                                     .withButton ("OK", 1)
+                                                     .withAssociatedComponent (this),
+                                                 std::function<void (int)> {});
+}
+
+void UVPEditor::refreshPresetLabel()
+{
+    // the top bar names the preset in use, so a save or load shows straight away
+    const auto& f = proc.presets.currentFile;
+    const auto label = f != juce::File() ? f.getFileNameWithoutExtension().toUpperCase() : juce::String ("MENU");
+    if (face->menuZone.getButtonText() != label)
+        face->menuZone.setButtonText (label);
 }

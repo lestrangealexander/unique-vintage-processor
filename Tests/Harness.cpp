@@ -637,6 +637,46 @@ int cmdCalibrateLpf (const juce::String& headerPath)
     return 0;
 }
 
+int cmdMix()
+{
+    // MIX blends the whole processed signal (vintage + tape + OUTPUT) with the untouched input
+    const Sig in = brightMix ((size_t) (kFs * 2), 5);
+    auto heavy = [] (float mix, bool delta)
+    {
+        EngineParams p;
+        p.amount = 11.0f; p.mode = 2; p.inputDb = 6.0f; p.outputDb = -4.0f; p.autoGain = true; p.osIndex = 2;
+        p.hpfHz = 2000.0f; p.lpfHz = 12000.0f; p.lpfOn = true;
+        p.tapeOn = true; p.tapeModel = 3; p.tapeDriveDb = 6.0f;
+        p.mix = mix; p.delta = delta;
+        return p;
+    };
+    auto run = [&] (const EngineParams& p, int& lat) { return runEngine (in, p, 512, &lat); };
+    int lat = 0;
+    const Sig o0 = run (heavy (0.0f, false), lat);
+    double worst0 = 0.0;
+    for (size_t i = (size_t) lat; i < in.size(); ++i)
+        worst0 = std::max ({ worst0, (double) std::abs (o0.l[i] - in.l[i - (size_t) lat]), (double) std::abs (o0.r[i] - in.r[i - (size_t) lat]) });
+    std::printf ("MIX 0%% (HECTIC 11, IN +6, OUT -4, AG, tape GARAGE +6, LPF): max |out - input| = %g %s\n",
+                 worst0, worst0 == 0.0 ? "(bit-exact)" : "");
+
+    const Sig o100 = run (heavy (1.0f, false), lat);
+    const Sig o50 = run (heavy (0.5f, false), lat);
+    double worst50 = 0.0, peak100 = 0.0;
+    for (size_t i = (size_t) lat; i < in.size(); ++i)
+    {
+        const float expect = 0.5f * o100.l[i] + 0.5f * in.l[i - (size_t) lat];
+        worst50 = std::max (worst50, (double) std::abs (o50.l[i] - expect));
+        peak100 = std::max (peak100, (double) std::abs (o100.l[i]));
+    }
+    std::printf ("MIX 50%% = half processed + half input: max deviation %g (processed peak %.3f)\n", worst50, peak100);
+
+    const Sig d0 = run (heavy (0.0f, true), lat);
+    double dpk = 0.0;
+    for (size_t i = (size_t) lat + 4800; i < in.size(); ++i) dpk = std::max (dpk, (double) std::abs (d0.l[i]));
+    std::printf ("DELTA at MIX 0%%: peak %g (silent)\n", dpk);
+    return (worst0 == 0.0 && worst50 < 1.0e-4 && dpk == 0.0) ? 0 : 1;
+}
+
 int cmdAgLpfExtreme()
 {
     const Sig ref = brightMix ((size_t) (kFs * 3), 11);
@@ -1137,6 +1177,7 @@ int main (int argc, char** argv)
     if (cmd == "agcheck") return cmdAgCheck();
     if (cmd == "aglpf") return cmdAgLpf();
     if (cmd == "aglpfx") return cmdAgLpfExtreme();
+    if (cmd == "mix") return cmdMix();
     if (cmd == "calibratelpf") return cmdCalibrateLpf (argc > 2 ? argv[2] : "AutoGainLpfTables.h");
     if (cmd == "display") return cmdDisplay();
     if (cmd == "calibtape") return cmdCalibTape();

@@ -307,7 +307,20 @@ void ZoneButton::paintButton (juce::Graphics& g, bool over, bool down)
             l.lineTo (29.0f, 7.0f + 5.0f * (float) i);
             strokeRound (g, l, 2.0f);
         }
-        drawText (g, getButtonText(), 40.0f, 16.6f, f, col::ink, Anchor::Start);
+        // long preset names first lose some letter-spacing, then get cut short with an ellipsis
+        auto text = getButtonText();
+        const float room = b.getWidth() - 40.0f - 8.0f;
+        auto nf = f;
+        if (textWidth (nf, text) > room)
+            nf = font (Weight::SemiBold, 12.0f, 0.5f);
+        if (textWidth (nf, text) > room)
+        {
+            const auto dots = juce::String::fromUTF8 ("\xe2\x80\xa6");
+            while (text.isNotEmpty() && textWidth (nf, text.trimEnd() + dots) > room)
+                text = text.dropLastCharacters (1);
+            text = text.trimEnd() + dots;
+        }
+        drawText (g, text, 40.0f, 16.6f, nf, col::ink, Anchor::Start);
     }
     else
         drawText (g, getButtonText(), b.getCentreX(), 16.6f, f, col::ink);

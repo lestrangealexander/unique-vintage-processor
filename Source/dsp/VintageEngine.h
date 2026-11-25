@@ -3,7 +3,7 @@
 //  in -> INPUT -> suppressor (STFT, linked, masked to the FILTER band) -> LR4 linear-phase band split
 //        band (HPF..LPF) -> harmonic stage (oversampled, RIAA emphasis)  ┐
 //        rest (outside)  -> latency align ──────────────────────────────┴-> sum
-//     -> AUTO GAIN -> MIX (vs. aligned dry) -> DELTA -> MORE COLOUR tape -> OUTPUT -> IN/OUT
+//     -> AUTO GAIN -> DELTA -> MORE COLOUR tape -> OUTPUT -> MIX (vs. the untouched input) -> IN/OUT
 //
 // Latency is constant for every setting (all optional paths are padded).
 #pragma once
@@ -88,8 +88,8 @@ private:
     int vintageLatency = 0, totalLatency = 0;
 
     juce::AudioBuffer<float> dryIn, restBuf, bandBuf;
-    std::array<IntDelay, 2> restAlign, dryForMix, dryForBypass;
-    LinearRamp inGain, outGain, mixRamp, compRamp, deltaRamp, bypassRamp, tapeMakeup;
+    std::array<IntDelay, 2> restAlign, dryForDelta, dryForBypass;
+    LinearRamp inGain, outGain, mixRamp, compRamp, deltaRamp, deltaMixRamp, bypassRamp, tapeMakeup;
 
     // output analyser
     std::unique_ptr<juce::dsp::FFT> outFft;

@@ -53,11 +53,24 @@ jobs:
           sleep 3
           auval -v aufx UvPr SqAu 2>&1 | tee auval.log | tail -40
 
+      # Drives the editor the way a user would (type-in values, saving and loading presets) on a real Mac.
+      # Built separately (native arch only), after packaging, so the shipped plug-ins are untouched.
+      - name: Editor checks (snapshot)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cmake -B build-snap -DCMAKE_BUILD_TYPE=Release -DUVP_BUILD_HARNESS=ON -DCMAKE_OSX_ARCHITECTURES=arm64 \
+                -DUVP_JUCE_PATH="$PWD/build/_deps/juce-src" > snapshot-configure.log 2>&1
+          cmake --build build-snap --target UVPSnapshot -j 4 2>&1 | tee snapshot-build.log | tail -5
+          "build-snap/UVPSnapshot_artefacts/Release/UVPSnapshot" "$PWD/snap" 2>&1 | tee mac-snapshot.log
+
       - name: Collect
+        if: always()
         run: |
           mkdir -p out
-          cp dist/UniqueVintageProcessor-mac.zip lipo.log out/
-          cp auval.log out/ 2>/dev/null || true
+          cp dist/UniqueVintageProcessor-mac.zip lipo.log out/ 2>/dev/null || true
+          cp auval.log mac-snapshot.log out/ 2>/dev/null || true
+          for f in snap/*.png; do [ -f "$f" ] && cp "$f" "out/mac-$(basename "$f")"; done; true
 
       - uses: actions/upload-artifact@v4
         with:
@@ -123,14 +136,14 @@ jobs:
           cmake -B build -DUVP_BUILD_HARNESS=ON > snapshot-configure.log 2>&1
           cmake --build build --config Release --target UVPSnapshot --parallel 4 2>&1 | tee snapshot-build.log | tail -5
           exe=$(find build -name UVPSnapshot.exe | head -1)
-          "$exe" "$(cygpath -w "$PWD/snap")" 2>&1 | tee snapshot.log
+          "$exe" "$(cygpath -w "$PWD/snap")" 2>&1 | tee win-snapshot.log
 
       - name: Collect
         if: always()
         run: |
           mkdir -p out
           cp dist/UniqueVintageProcessor-win64.zip out/ 2>/dev/null || true
-          cp contents.log pluginval.log snapshot.log out/ 2>/dev/null || true
+          cp contents.log pluginval.log win-snapshot.log out/ 2>/dev/null || true
           for f in snap/*.png; do [ -f "$f" ] && cp "$f" "out/win-$(basename "$f")"; done; true
 
       - uses: actions/upload-artifact@v4
