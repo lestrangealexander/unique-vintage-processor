@@ -128,6 +128,9 @@ int main (int argc, char** argv)
                                             juce::MouseInputSource::defaultPressure, 0.0f, t += 25);
                 };
                 auto clickAt = [&] (juce::Point<float> at) { press (at, true); press (at, false); };
+                clickAt ({ 500.0f, 560.0f }); // a first click on the new window (macOS takes it to activate the window)
+                pump (200);
+                t += 1000;
                 clickAt ({ 420.0f, 352.0f });
                 clickAt ({ 420.0f, 352.0f });
                 pump (50);

@@ -81,7 +81,7 @@ public:
         for (const auto& dir : { primaryFolder(), fallbackFolder() })
             if (f.isAChildOf (dir))
                 return f.getRelativePathFrom (dir).upToLastOccurrenceOf (".", false, false)
-                        .replace ("\\", " / ").replace ("/", " / ");
+                        .replace ("\\", "/").replace ("/", " / ");
         return f.getFileNameWithoutExtension();
     }
 
