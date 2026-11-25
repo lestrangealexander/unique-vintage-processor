@@ -5,7 +5,8 @@ if(APPLE)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Universal binary")
 endif()
 
-project(UniqueVintageProcessor VERSION 0.7.0 LANGUAGES C CXX)
+project(UniqueVintageProcessor VERSION 0.7.1 LANGUAGES C CXX)
+add_compile_definitions(UVP_VERSION_STRING="${PROJECT_VERSION}")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

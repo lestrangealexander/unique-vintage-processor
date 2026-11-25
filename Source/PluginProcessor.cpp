@@ -105,19 +105,8 @@ bool UniqueVintageProcessor::isBusesLayoutSupported (const BusesLayout& layouts)
     return out == juce::AudioChannelSet::mono() || out == juce::AudioChannelSet::stereo();
 }
 
-void UniqueVintageProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+uvp::EngineParams UniqueVintageProcessor::currentEngineParams() const
 {
-    const int ch = std::max (1, std::min (2, getTotalNumOutputChannels()));
-    engine.prepare (sampleRate, std::max (32, samplesPerBlock), ch);
-    setLatencySamples (engine.getLatencySamples());
-}
-
-void UniqueVintageProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
-{
-    juce::ScopedNoDenormals noDenormals;
-    const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
-    for (int c = numIn; c < numOut; ++c) buffer.clear (c, 0, buffer.getNumSamples());
-
     uvp::EngineParams p;
     p.inputDb = pInput->load();
     p.outputDb = pOutput->load();
@@ -136,7 +125,24 @@ void UniqueVintageProcessor::processBlock (juce::AudioBuffer<float>& buffer, juc
     p.tapeOn = pMoreColour->load() > 0.5f;
     p.tapeModel = (int) std::lround (pTapeModel->load());
     p.tapeDriveDb = pTapeDrive->load();
-    engine.setParams (p);
+    return p;
+}
+
+void UniqueVintageProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    const int ch = std::max (1, std::min (2, getTotalNumOutputChannels()));
+    engine.setParams (currentEngineParams()); // ramps start at the session's settings, not the defaults
+    engine.prepare (sampleRate, std::max (32, samplesPerBlock), ch);
+    setLatencySamples (engine.getLatencySamples());
+}
+
+void UniqueVintageProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    juce::ScopedNoDenormals noDenormals;
+    const int numIn = getTotalNumInputChannels(), numOut = getTotalNumOutputChannels();
+    for (int c = numIn; c < numOut; ++c) buffer.clear (c, 0, buffer.getNumSamples());
+
+    engine.setParams (currentEngineParams());
 
     const int nCh = std::min (2, buffer.getNumChannels());
     engine.process (buffer.getArrayOfWritePointers(), nCh, buffer.getNumSamples());

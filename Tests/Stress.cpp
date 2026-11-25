@@ -88,6 +88,47 @@ int main()
         std::printf ("state round trip: %s\n", same ? "ok" : "MISMATCH");
     }
 
+    // MIX 0 % through the whole plug-in, from the very first sample after prepareToPlay:
+    // the output is the input, delayed by the reported latency, at the heaviest settings
+    {
+        UniqueVintageProcessor p;
+        auto setv = [&p] (const char* id, float v) { auto* q = p.apvts.getParameter (id); q->setValueNotifyingHost (q->convertTo0to1 (v)); };
+        setv (ParamIDs::mode, 2.0f);
+        setv (ParamIDs::amount, 11.0f);
+        setv (ParamIDs::input, 6.0f);
+        setv (ParamIDs::output, -4.0f);
+        setv (ParamIDs::moreColour, 1.0f);
+        setv (ParamIDs::tapeModel, 3.0f);
+        setv (ParamIDs::tapeDrive, 6.0f);
+        setv (ParamIDs::lpfFreq, 12000.0f);
+        setv (ParamIDs::mix, 0.0f);
+        p.setPlayConfigDetails (2, 2, 48000.0, 512);
+        p.prepareToPlay (48000.0, 512);
+        const int lat = p.getLatencySamples();
+        const int total = 48000 * 2;
+        juce::Random r2 (9);
+        std::vector<float> inL ((size_t) total), inR ((size_t) total), outL ((size_t) total), outR ((size_t) total);
+        for (int i = 0; i < total; ++i) { inL[(size_t) i] = 0.5f * (r2.nextFloat() * 2.0f - 1.0f); inR[(size_t) i] = 0.5f * (r2.nextFloat() * 2.0f - 1.0f); }
+        juce::MidiBuffer midi;
+        for (int pos = 0; pos < total;)
+        {
+            const int n = std::min (total - pos, 1 + r2.nextInt (700));
+            juce::AudioBuffer<float> b (2, n);
+            b.copyFrom (0, 0, inL.data() + pos, n);
+            b.copyFrom (1, 0, inR.data() + pos, n);
+            p.processBlock (b, midi);
+            std::copy (b.getReadPointer (0), b.getReadPointer (0) + n, outL.begin() + pos);
+            std::copy (b.getReadPointer (1), b.getReadPointer (1) + n, outR.begin() + pos);
+            pos += n;
+        }
+        double worst = 0.0;
+        for (int i = lat; i < total; ++i)
+            worst = std::max ({ worst, (double) std::abs (outL[(size_t) i] - inL[(size_t) (i - lat)]),
+                                (double) std::abs (outR[(size_t) i] - inR[(size_t) (i - lat)]) });
+        check (worst == 0.0, "MIX 0 % gives back the input exactly (whole plug-in, from the first sample)");
+        std::printf ("MIX 0%% through the plug-in (HECTIC 11, IN +6, OUT -4, tape GARAGE +6): max |out - input| = %g\n", worst);
+    }
+
     // editor opens and closes cleanly
     {
         UniqueVintageProcessor p;

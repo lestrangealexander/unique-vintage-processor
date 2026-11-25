@@ -73,6 +73,10 @@ public:
 
 private:
     static float tableCompDb (int mode, float amount, float hpfHz, bool hpfOn, float inputDb) noexcept;
+    void pushParamsToModules() noexcept;
+    float mixTarget() const noexcept;
+    float compTarget() const noexcept;
+    float tapeMakeupTarget() const noexcept;
     static float bandCompDb (int mode, float amount, float hpfHz, bool hpfOn, float edgeHz, float inputDb, float fullDb) noexcept;
     static float lpfResidualDb (int mode, float amount, float hpfHz, bool hpfOn, float lpfHz, float inputDb) noexcept;
     void updateDisplay() noexcept;

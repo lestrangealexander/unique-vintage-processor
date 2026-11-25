@@ -405,6 +405,7 @@ void UVPEditor::showPresetMenu()
     const auto files = proc.presets.list();
     const auto current = proc.presets.currentFile;
     juce::PopupMenu m;
+    m.addSectionHeader ("UNIQUE VINTAGE PROCESSOR " UVP_VERSION_STRING);
     m.addSectionHeader ("PRESETS");
     if (files.isEmpty())
         m.addItem (-1, "No presets saved yet", false, false);

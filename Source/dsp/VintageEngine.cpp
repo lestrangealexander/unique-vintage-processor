@@ -146,11 +146,40 @@ float VintageEngine::tapeCompDb (int model, float driveDb) noexcept
     return T[model][d0] + (di - (float) d0) * (T[model][d1] - T[model][d0]);
 }
 
+void VintageEngine::pushParamsToModules() noexcept
+{
+    const auto& p = params;
+    suppressor.setParams ({ p.amount, p.q, p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn });
+    split.setBand (p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn);
+    harmonics.setOversampling (p.osIndex);
+    harmonics.setParams (p.amount, (HarmonicStage::Mode) std::max (0, std::min (2, p.mode)));
+    tape.setOversampling (p.osIndex);
+    tape.setParams (p.tapeOn && ! p.delta, p.tapeModel, p.tapeDriveDb);
+    tape.setTransportEnabled (p.tapeTransport);
+}
+
+float VintageEngine::mixTarget() const noexcept { return std::max (0.0f, std::min (1.0f, params.mix)); }
+
+float VintageEngine::compTarget() const noexcept
+{
+    const auto& p = params;
+    if (! p.autoGain) return 1.0f;
+    return dbToGain (-p.inputDb + vintageCompDb (p.mode, p.amount, p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn, p.inputDb));
+}
+
+float VintageEngine::tapeMakeupTarget() const noexcept
+{
+    const auto& p = params;
+    if (! p.tapeOn || p.delta) return 1.0f;
+    return p.autoGain ? dbToGain (tapeCompDb (p.tapeModel, p.tapeDriveDb)) : dbToGain (p.tapeDriveDb);
+}
+
 void VintageEngine::prepare (double sampleRate, int maxBlockSize, int numChannels)
 {
     fs = sampleRate;
     maxBlock = std::max (1, maxBlockSize);
     numCh = std::max (1, std::min (2, numChannels));
+    pushParamsToModules(); // start every stage (and ramp, below) where the current settings are
 
     suppressor.prepare (fs, numCh);
     split.prepare (fs, numCh);
@@ -174,12 +203,12 @@ void VintageEngine::prepare (double sampleRate, int maxBlockSize, int numChannel
     }
     inGain.reset (fs, 0.02, dbToGain (params.inputDb));
     outGain.reset (fs, 0.02, dbToGain (params.outputDb));
-    mixRamp.reset (fs, 0.02, params.mix);
-    compRamp.reset (fs, 0.05, 1.0f);
+    mixRamp.reset (fs, 0.02, mixTarget());
+    compRamp.reset (fs, 0.05, compTarget());
     deltaRamp.reset (fs, 0.02, params.delta ? 1.0f : 0.0f);
     deltaMixRamp.reset (fs, 0.02, params.delta ? 1.0f : 0.0f);
     bypassRamp.reset (fs, 0.02, params.bypass ? 1.0f : 0.0f);
-    tapeMakeup.reset (fs, 0.05, 1.0f);
+    tapeMakeup.reset (fs, 0.05, tapeMakeupTarget());
 
     int rateFactor = 1;
     while (fs / rateFactor > 64000.0) rateFactor <<= 1;
@@ -233,30 +262,16 @@ void VintageEngine::process (float* const* ch, int nChIn, int n) noexcept
         return;
     }
 
-    const auto& p = params;
-    // ---- parameters into the modules
-    suppressor.setParams ({ p.amount, p.q, p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn });
-    split.setBand (p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn);
-    harmonics.setOversampling (p.osIndex);
-    harmonics.setParams (p.amount, (HarmonicStage::Mode) std::max (0, std::min (2, p.mode)));
-    tape.setOversampling (p.osIndex);
-    tape.setParams (p.tapeOn && ! p.delta, p.tapeModel, p.tapeDriveDb);
-    tape.setTransportEnabled (p.tapeTransport);
-
-    inGain.setTarget (dbToGain (p.inputDb));
-    outGain.setTarget (dbToGain (p.outputDb));
-    mixRamp.setTarget (std::max (0.0f, std::min (1.0f, p.mix)));
-    deltaRamp.setTarget (p.delta ? 1.0f : 0.0f);
-    deltaMixRamp.setTarget (p.delta ? 1.0f : 0.0f);
-    bypassRamp.setTarget (p.bypass ? 1.0f : 0.0f);
-    float comp = 1.0f;
-    if (p.autoGain)
-        comp = dbToGain (-p.inputDb + vintageCompDb (p.mode, p.amount, p.hpfHz, p.hpfOn, p.lpfHz, p.lpfOn, p.inputDb));
-    compRamp.setTarget (comp);
-    float tapeGain = 1.0f;
-    if (p.tapeOn && ! p.delta)
-        tapeGain = p.autoGain ? dbToGain (tapeCompDb (p.tapeModel, p.tapeDriveDb)) : dbToGain (p.tapeDriveDb);
-    tapeMakeup.setTarget (tapeGain);
+    // ---- parameters into the modules and the gain ramps
+    pushParamsToModules();
+    inGain.setTarget (dbToGain (params.inputDb));
+    outGain.setTarget (dbToGain (params.outputDb));
+    mixRamp.setTarget (mixTarget());
+    deltaRamp.setTarget (params.delta ? 1.0f : 0.0f);
+    deltaMixRamp.setTarget (params.delta ? 1.0f : 0.0f);
+    bypassRamp.setTarget (params.bypass ? 1.0f : 0.0f);
+    compRamp.setTarget (compTarget());
+    tapeMakeup.setTarget (tapeMakeupTarget());
 
     // ---- 1. keep the untouched input, apply INPUT
     for (int c = 0; c < nCh; ++c)

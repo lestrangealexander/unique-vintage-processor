@@ -63,6 +63,7 @@ public:
     std::atomic<float> uiScale { 1.0f };
 
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    uvp::EngineParams currentEngineParams() const;
 
     /** The FILTER low-pass sits at the top of its range when it is off. */
     static constexpr float kLpfTopHz = 20000.0f;
